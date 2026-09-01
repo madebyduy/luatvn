@@ -87,6 +87,12 @@ export interface CongBaoDraftReport {
    */
   readonly unassignedLines: readonly { readonly page: number; readonly text: string }[];
   readonly structureHeadings: readonly string[];
+  /**
+   * The signature block that closes the document: who signed, on whose
+   * behalf. Held out of the last article's text, and listed so a reviewer can
+   * see it was recognised rather than lost.
+   */
+  readonly closingBlockLines: readonly string[];
 }
 
 export interface CongBaoDraftResult {
@@ -182,7 +188,7 @@ export function extractCongBaoDraft(
 
   interface Collected {
     readonly number: number;
-    readonly lines: string[];
+    readonly lines: TextLine[];
   }
   const collected: Collected[] = [];
   const structureHeadings: string[] = [];
@@ -193,7 +199,7 @@ export function extractCongBaoDraft(
     const article = articlePattern.exec(line.text);
     if (article !== null) {
       const number = Number(article[1]);
-      current = { lines: [line.text], number };
+      current = { lines: [line], number };
       collected.push(current);
       continue;
     }
@@ -212,7 +218,7 @@ export function extractCongBaoDraft(
       }
       continue;
     }
-    current.lines.push(line.text);
+    current.lines.push(line);
   }
 
   if (collected.length === 0) {
@@ -244,10 +250,30 @@ export function extractCongBaoDraft(
     );
   }
 
+  // A Vietnamese legal document closes with a signature block set to the right
+  // of centre: "TM. CHÍNH PHỦ / KT. THỦ TƯỚNG / <name>". It follows the last
+  // article, so it lands inside that article's text unless it is recognised.
+  // That would put the signer's name inside the provision and inside its hash,
+  // and a citation of the last article would quote it. Position decides this,
+  // not wording: body text is flush or indented on the left, this block is not.
+  const closingBlockLines: string[] = [];
+  const lastArticle = collected.at(-1);
+  if (lastArticle !== undefined) {
+    const centre = pdfText.pageWidth / 2;
+    while (lastArticle.lines.length > 1) {
+      const tail = lastArticle.lines.at(-1);
+      if (tail === undefined || tail.x <= centre) {
+        break;
+      }
+      closingBlockLines.unshift(tail.text);
+      lastArticle.lines.pop();
+    }
+  }
+
   const provisionVersions: Omit<PublishedProvisionVersion, "datasetReleaseId">[] = [];
   for (const entry of collected) {
-    const legalText = entry.lines.join("\n");
-    const headingLine = entry.lines[0] ?? "";
+    const legalText = entry.lines.map((entryLine) => entryLine.text).join("\n");
+    const headingLine = entry.lines[0]?.text ?? "";
     if (legalText.trim() === "") {
       throw new CongBaoExtractError(
         "TEXT_UNACCOUNTED",
@@ -293,6 +319,7 @@ export function extractCongBaoDraft(
     report: {
       apparatusLines,
       articleNumbers: numbers,
+      closingBlockLines,
       bodyFontSize,
       documentNumber: reference.documentNumber,
       effectiveFrom: reference.effectiveFrom,

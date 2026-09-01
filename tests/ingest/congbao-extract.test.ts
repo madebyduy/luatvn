@@ -22,6 +22,7 @@ function documentOf(lines: readonly TextLine[], pageCount = 1): PdfTextDocument 
       .toSorted((left, right) => right.lines - left.lines),
     lines,
     pageCount,
+    pageWidth: 595,
   };
 }
 
@@ -151,6 +152,33 @@ describe("segmenting a gazette PDF into provisions", () => {
       expect(version.evidence[0]?.sourceSha256).toBe("a".repeat(64));
       expect(version.validTime.from).toBe("2026-01-01");
     }
+  });
+
+  it("keeps the signature block out of the last article, and says where it went", () => {
+    // The block that closes a document sits right of centre: "TM. CHÍNH PHỦ /
+    // KT. THỦ TƯỚNG / <name>". It follows the last article, so without this it
+    // lands inside that article - putting the signer's name into the provision
+    // and into its hash, and into every citation of it.
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Trách nhiệm thi hành"),
+        line("Các Bộ trưởng chịu trách nhiệm thi hành Nghị định này."),
+        line("TM. CHÍNH PHỦ", { x: 402 }),
+        line("KT. THỦ TƯỚNG", { x: 401 }),
+        line("Nguyễn Văn A", { x: 415 }),
+      ]),
+    );
+    expect(draft.provisionVersions[0]?.legalText).toBe(
+      "Điều 1. Trách nhiệm thi hành\nCác Bộ trưởng chịu trách nhiệm thi hành Nghị định này.",
+    );
+    expect(report.closingBlockLines).toEqual(["TM. CHÍNH PHỦ", "KT. THỦ TƯỚNG", "Nguyễn Văn A"]);
+  });
+
+  it("does not strip an indented line that merely sits to the right", () => {
+    const { draft } = draftOf(
+      documentOf([line("Điều 1. Phạm vi"), line("Đoạn thân bài thụt lề bình thường.", { x: 128 })]),
+    );
+    expect(draft.provisionVersions[0]?.legalText).toContain("thụt lề bình thường");
   });
 
   it("derives stable identifiers from the document number and article number", () => {

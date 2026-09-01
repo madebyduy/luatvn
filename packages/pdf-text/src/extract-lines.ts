@@ -17,6 +17,12 @@ export interface TextLine {
 
 export interface PdfTextDocument {
   readonly pageCount: number;
+  /**
+   * Width of the first page in PDF user space. Layout rules need it: a line
+   * sitting right of centre is positioned, not indented, and that is how a
+   * signature block announces itself.
+   */
+  readonly pageWidth: number;
   readonly lines: readonly TextLine[];
   /** Distinct glyph heights and how many lines carry each, largest first. */
   readonly fontSizeHistogram: readonly { readonly fontSize: number; readonly lines: number }[];
@@ -136,9 +142,13 @@ export async function extractPdfLines(
   }
 
   const lines: TextLine[] = [];
+  let pageWidth = 0;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     // eslint-disable-next-line no-await-in-loop -- pages must be read in order and pdfjs keeps one document handle
     const page = await pdf.getPage(pageNumber);
+    if (pageNumber === 1) {
+      pageWidth = page.getViewport({ scale: 1 }).width;
+    }
     // eslint-disable-next-line no-await-in-loop -- same handle, sequential by design
     const content = await page.getTextContent();
     const rows = new Map<number, Fragment[]>();
@@ -196,5 +206,6 @@ export async function extractPdfLines(
       .toSorted((left, right) => right.lines - left.lines),
     lines,
     pageCount: pdf.numPages,
+    pageWidth,
   };
 }

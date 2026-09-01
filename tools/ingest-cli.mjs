@@ -319,6 +319,11 @@ async function runCongBao(detailUrl, flags) {
       `  cỡ chữ thân bài ${String(report.bodyFontSize)}; bỏ ${String(report.runningLines.length)} dòng header lặp, giữ riêng ${String(report.apparatusLines.length)} dòng chú thích`,
     ].join("\n"),
   );
+  if (report.closingBlockLines.length > 0) {
+    // Shown, not silently removed: this text was in the document and a reviewer
+    // must be able to see where it went.
+    out(`  khối chữ ký (giữ ngoài nguyên văn Điều cuối): ${report.closingBlockLines.join(" / ")}`);
+  }
   if (report.unassignedLines.length > 0) {
     // Reported rather than hidden: these are usually chapter titles and the
     // signature block, but a reviewer must be able to see what was not placed.
