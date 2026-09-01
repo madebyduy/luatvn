@@ -181,4 +181,42 @@ describe("provision REST contract", () => {
       await timedApp.close();
     }
   });
+  it("serves a catalog a client can build a chooser from", async () => {
+    const response = await app.inject({
+      method: "POST",
+      payload: {
+        context: {
+          datasetReleaseId: syntheticReleaseId,
+          knownAt: "2026-08-31T01:00:00.000Z",
+          requestId: "request-synthetic-catalog",
+        },
+      },
+      url: "/v1/catalog",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.data.status).toBe("resolved");
+    expect(body.data.documents).toHaveLength(1);
+    expect(body.data.documents[0].provisions[0].versions).toHaveLength(2);
+    expect(body.untrustedContent).toBe(true);
+  });
+
+  it("rejects an unknown field on the catalog request", async () => {
+    const response = await app.inject({
+      method: "POST",
+      payload: {
+        context: {
+          datasetReleaseId: syntheticReleaseId,
+          knownAt: "2026-08-31T01:00:00.000Z",
+          requestId: "request-synthetic-catalog",
+        },
+        unexpected: true,
+      },
+      url: "/v1/catalog",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("INVALID_REQUEST");
+  });
 });

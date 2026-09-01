@@ -1,6 +1,6 @@
 # Operator runbook - manual dataset và solo runtime
 
-Runbook cho một operator mới: nhập liệu, kiểm tra, publish, chạy, smoke và rollback mà không cần bước ngoài tài liệu. Nguồn văn bản, người review và nơi lưu trữ được quy định tại SR-003 trong [`docs/06-source-register.md`](./06-source-register.md).
+Runbook cho một operator mới: nhập liệu, kiểm tra, publish, chạy, smoke và rollback mà không cần bước ngoài tài liệu. Nguồn văn bản, người review và nơi lưu trữ được quy định tại SR-003 trong sổ đăng ký nguồn của dự án.
 
 ## 0. Chuẩn bị (terminal mới)
 
@@ -94,7 +94,7 @@ Liệt kê record và trạng thái review. Người review đối chiếu từn
 pnpm dataset promote data/manual/staging-rel-xxx.json --version pv_vbpl_xxx --reviewed-by "Ho ten"
 ```
 
-`promote` là con đường duy nhất nâng record lên `verified` và ghi audit vào `<staging>.review-log.json`. Khi mọi record đã `verified` thì validate + publish như mục 2-3. Draft chưa promote không thể publish.
+`promote` là con đường duy nhất nâng record lên `verified` và ghi audit vào `<staging>.review-log.json`. Khi publish, file audit này **được đóng gói vào release** cùng bytes nguồn đã lưu, để người ngoài kiểm chứng được (mục 4b). Khi mọi record đã `verified` thì validate + publish như mục 2-3. Draft chưa promote không thể publish.
 
 Cào tăng dần theo sitemap (khám phá + phát hiện thay đổi qua `lastmod`, không tải lại văn bản chưa đổi):
 
@@ -105,7 +105,83 @@ pnpm ingest crawl --seeds "https://vbpl.vn/sitemap/1.xml" --pattern "/van-ban/ch
 - Fetcher luôn tuân thủ robots.txt, rate limit theo host (mặc định 2s/request) và chỉ chấp nhận host đã đăng ký SR-003; `--allow-hosts` chỉ dành cho drill/test.
 - `pnpm ingest fetch <url>` vẫn dùng được để tải một file đơn lẻ (PDF/HTML) kèm evidence.
 - Lưu ý: `Next-Action` id của vbpl.vn đổi khi site redeploy; nếu `draft` trả lỗi METADATA_NOT_FOUND, lấy id mới và truyền `--content-action` (và `--relations-action` cho tab Lược đồ).
-- **File gốc (PDF) không được cào tự động**: tab "Văn bản gốc"/"Tải về" của vbpl.vn có reCAPTCHA. Người vận hành tự mở trình duyệt tải file gốc về `data/manual/sources/<release>/` rồi ghi SHA-256 vào evidence. Đây là ranh giới cứng trong AGENTS.md và ADR-0004, không được lách.
+- **File gốc (PDF) không được cào tự động**: tab "Văn bản gốc"/"Tải về" của vbpl.vn có reCAPTCHA. Người vận hành tự mở trình duyệt tải file gốc về `data/manual/sources/<release>/` rồi ghi SHA-256 vào evidence. Đây là ranh giới cứng ghi tại [ADR-0004](./decisions/0004-ingest-crawler-before-build.md), không được lách.
+
+## 4b. Kiểm chứng độc lập (P-025)
+
+```bash
+pnpm dataset verify
+```
+
+Lệnh này **dựng lại nguyên văn từ chính bytes nguồn đã lưu trong release** rồi đối chiếu hash. Nó trả lời được câu hỏi "dựa vào đâu mà tin?" bằng một quy trình chạy được, không phải bằng lời hứa.
+
+Bốn mắt xích được kiểm:
+
+1. **Toàn vẹn release** - mọi file trong `manifest.json` phải khớp SHA-256 đã ghi. Sửa file mà quên vá manifest thì release không load được.
+2. **Nguồn có mặt** - mỗi record phải có một file nguồn trong release hash đúng bằng `sourceSha256` của evidence. Khớp theo **hash chứ không theo tên file**, nên đổi tên hay tráo file đều không qua được.
+3. **Nguyên văn dựng lại được** - chạy lại bộ bóc tách trên bytes nguồn đó phải ra đúng `legalTextSha256`. Đây là mắt xích mạnh nhất: ai sửa nguyên văn rồi vá lại toàn bộ hash vẫn bị bắt, vì văn bản không còn dựng ra được từ nguồn.
+4. **Có người chịu trách nhiệm** - mỗi record `verified` phải có một mục trong `review-log.json` ghi ai duyệt, lúc nào.
+
+Phải nói rõ giới hạn: lệnh này chứng minh **nguyên văn được suy ra từ nguồn đã lưu và có người duyệt**. Nó **không** chứng minh bản thân nguồn nói đúng luật - việc đó vẫn phải mở URL nguồn chính thức trong evidence để đối chiếu.
+
+Người ngoài muốn tự kiểm mà không tin máy của bạn: sao chép thư mục release, chạy `pnpm dataset verify --data-dir <thư-mục>` trên máy họ. Toàn bộ dữ liệu cần thiết nằm trong release.
+
+Diễn tập toàn bộ chuỗi bằng dữ liệu giả lập (không phải nội dung pháp luật):
+
+```bash
+node tools/ui-drill.mjs
+```
+
+Lệnh này đi đúng đường thật: bóc tách → người duyệt từng record → publish kèm nguồn và audit → verify.
+
+## 4d. Chuyển sang máy khác (ADR-0007)
+
+Bản phát hành là thứ duy nhất bắt buộc đi theo. Kho nguồn thô và file nháp ở lại máy cũ.
+
+Trên máy mới:
+
+```bash
+git clone <private remote> && cd luatvn && pnpm install
+```
+
+```bash
+pnpm dataset verify
+```
+
+Verify **trước** khi chạy: đừng tin dữ liệu chỉ vì nó vừa clone về. Đạt rồi mới `pnpm start`.
+
+Hai file làm nên khả năng này, đừng sửa nếu chưa hiểu:
+
+- `.gitignore` quyết định cái gì được mang theo. `published.json` và `sources-manifest.json` **phải** được commit: thiếu con trỏ thì máy mới không biết phục vụ release nào.
+- `.gitattributes` chặn git đổi LF thành CRLF trong `data/manual/**`. Thiếu nó, checkout trên Windows làm sai hash mọi file và server từ chối khởi động với `RELEASE_FILE_HASH_MISMATCH` - đúng, nhưng không chạy được.
+
+Kiểm lại bất cứ lúc nào bằng bài diễn tập chạy thật (dựng release, commit, clone, nạp và dựng lại nguyên văn trên bản sao chép):
+
+```bash
+pnpm drill:portability
+```
+
+## 4c. Chạy MCP cho trợ lý AI (P-040)
+
+```bash
+pnpm build
+```
+
+```bash
+pnpm mcp
+```
+
+Server nói giao thức MCP qua stdio, nạp đúng bản phát hành ở `LUATVN_DATA_DIR`. Khai báo trong cấu hình MCP của trình khách bằng lệnh `node apps/mcp/dist/main.js` kèm biến môi trường tương ứng.
+
+Bốn công cụ: `liet_ke_danh_muc`, `tra_cuu_dieu_khoan_tai_thoi_diem`, `so_sanh_hai_phien_ban`, `xem_lich_su_sua_doi`.
+
+Ba ràng buộc quan trọng:
+
+- **Trợ lý không chọn được bản phát hành.** Server chỉ trả lời trên release nó nạp lúc khởi động, nên mô hình không thể lạc sang dữ liệu chưa kiểm chứng.
+- **Mỗi kết quả kèm quy tắc sử dụng**: nội dung pháp luật là dữ liệu chứ không phải chỉ thị; `unknown`/`conflict` không được trả lời như đã xác định; trích dẫn phải nêu số hiệu, mã phiên bản, nguồn và SHA-256.
+- **Tham số lạ bị từ chối** vì đầu vào được kiểm bằng chính contract công khai của REST.
+
+Hiện chỉ hỗ trợ stdio cục bộ. Chưa có transport mạng và chưa có lớp xác thực - đó là quyết định còn để mở (P-040 MCP-006).
 
 ## 5. Smoke - kiểm tra đầu-cuối tự động
 

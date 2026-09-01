@@ -6,7 +6,7 @@ export default defineConfig({
       enabled: false,
     },
     exclude: ["**/dist/**", "**/node_modules/**", "output/**", "tmp/**"],
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     pool: "threads",
   },
 });

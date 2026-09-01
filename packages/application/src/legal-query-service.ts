@@ -8,6 +8,7 @@ import {
   resolveProvisionAt,
   type AmendmentRelation,
   type DatasetReleaseId,
+  type DocumentId,
   type EvidenceReference,
   type IsoInstant,
   type LegalCitation,
@@ -23,6 +24,7 @@ import type { LegalReadOperation, LegalReadRepository } from "./ports/legal-read
 const legalDataWarning = "LEGAL_DATA_NOT_ADVICE";
 export const maximumProvisionVersionsPerQuery = 256;
 export const maximumAmendmentRelationsPerTrace = 256;
+export const maximumCatalogVersions = 5_000;
 
 export interface QueryContextInput {
   readonly requestId: string;
@@ -84,6 +86,30 @@ export type CompareProvisionVersionsOutput = LegalEnvelope<{
   readonly fromCitation: LegalCitation;
   readonly toCitation: LegalCitation;
   readonly chunks: ReturnType<typeof diffLegalText>;
+}>;
+
+export interface CatalogVersion {
+  readonly provisionVersionId: ProvisionVersionId;
+  readonly reviewStatus: PublishedProvisionVersion["reviewStatus"];
+  readonly validFrom: LegalDate;
+  readonly validTo: LegalDate | null;
+}
+
+export interface CatalogProvision {
+  readonly heading: string | null;
+  readonly provisionId: ProvisionId;
+  readonly versions: readonly CatalogVersion[];
+}
+
+export interface CatalogDocument {
+  readonly documentId: DocumentId;
+  readonly documentNumber: string;
+  readonly provisions: readonly CatalogProvision[];
+}
+
+export type GetCatalogOutput = LegalEnvelope<{
+  readonly status: "resolved";
+  readonly documents: readonly CatalogDocument[];
 }>;
 
 export type TraceAmendmentsOutput = LegalEnvelope<{
@@ -383,6 +409,64 @@ export class LegalQueryService {
           context.knownAt,
         ),
         chunks: diffLegalText(verifiedFromVersion.legalText, verifiedToVersion.legalText),
+      },
+      context.datasetReleaseId,
+    );
+  }
+
+  // Shapes the published versions into documents and provisions. It reports
+  // what exists in the release; deciding which version applies at a date stays
+  // with getProvisionAt so the resolution rule is never duplicated.
+  public async getCatalog(
+    input: { readonly context: QueryContextInput },
+    executionInput: QueryExecutionInput,
+  ): Promise<GetCatalogOutput> {
+    const context = parseContext(input.context);
+    const execution = parseExecution(executionInput);
+    const operation = operationFor(context, execution);
+    const versions = await executeLegalRead(operation, () =>
+      this.repository.listCatalogVersions(context.datasetReleaseId, operation),
+    );
+    assertResultLimit("Catalog versions", versions.length, maximumCatalogVersions);
+
+    const documents = new Map<
+      DocumentId,
+      { documentNumber: string; provisions: Map<ProvisionId, CatalogProvision> }
+    >();
+    for (const version of versions) {
+      const document = documents.get(version.documentId) ?? {
+        documentNumber: version.documentNumber,
+        provisions: new Map<ProvisionId, CatalogProvision>(),
+      };
+      const existing = document.provisions.get(version.provisionId);
+      const entry: CatalogVersion = {
+        provisionVersionId: version.provisionVersionId,
+        reviewStatus: version.reviewStatus,
+        validFrom: version.validTime.from,
+        validTo: version.validTime.to,
+      };
+      document.provisions.set(version.provisionId, {
+        heading: existing?.heading ?? version.heading,
+        provisionId: version.provisionId,
+        versions: [...(existing?.versions ?? []), entry],
+      });
+      documents.set(version.documentId, document);
+    }
+
+    return envelope(
+      {
+        status: "resolved",
+        documents: [...documents.entries()].map(([documentId, document]) => ({
+          documentId,
+          documentNumber: document.documentNumber,
+          provisions: [...document.provisions.values()].map((provision) =>
+            Object.assign({}, provision, {
+              versions: provision.versions.toSorted((left, right) =>
+                left.validFrom.localeCompare(right.validFrom),
+              ),
+            }),
+          ),
+        })),
       },
       context.datasetReleaseId,
     );

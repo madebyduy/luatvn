@@ -136,26 +136,46 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-interface RawParagraph {
-  readonly kind: "article" | "content";
+// vbpl.vn marks each paragraph with its structural role. Classes observed on
+// 2026-09-01: prov-chapter and prov-section carry structure headings,
+// prov-article starts an article, and prov-clause / prov-item / prov-content
+// carry the text of khoan and diem. A class outside this list is treated as
+// content so no legal text is lost, and reported so a human sees the novelty.
+const contentClasses = new Set(["prov-content", "prov-clause", "prov-item"]);
+const structureClasses = new Set(["prov-chapter", "prov-section"]);
+
+export type ParagraphRole = "article" | "content" | "structure" | "unknown";
+
+export interface RawParagraph {
+  readonly role: ParagraphRole;
+  readonly className: string;
   readonly sourceId: string | null;
   readonly text: string;
 }
 
+function roleOf(className: string): ParagraphRole {
+  if (className === "prov-article") return "article";
+  if (contentClasses.has(className)) return "content";
+  if (structureClasses.has(className)) return "structure";
+  return "unknown";
+}
+
 function extractParagraphs(bodyHtml: string): readonly RawParagraph[] {
-  const paragraphPattern =
-    /<p([^>]*class="[^"]*prov-(article|content)[^"]*"[^>]*)>([\s\S]*?)<\/p>/gu;
+  const paragraphPattern = /<p([^>]*class="([^"]*)"[^>]*)>([\s\S]*?)<\/p>/gu;
   const paragraphs: RawParagraph[] = [];
   let match = paragraphPattern.exec(bodyHtml);
   while (match !== null) {
-    const attributes = match[1] ?? "";
-    const kind = match[2] === "article" ? "article" : "content";
-    const idMatch = /id="([^"]+)"/u.exec(attributes);
-    paragraphs.push({
-      kind,
-      sourceId: idMatch === null ? null : (idMatch[1] ?? null),
-      text: htmlToText(match[3] ?? ""),
-    });
+    const classMatch = /\bprov-[a-z-]+/u.exec(match[2] ?? "");
+    if (classMatch !== null) {
+      const className = classMatch[0];
+      const idMatch = /id="([^"]+)"/u.exec(match[1] ?? "");
+      paragraphs.push({
+        className,
+        role: roleOf(className),
+        sourceId: idMatch === null ? null : (idMatch[1] ?? null),
+        text: htmlToText(match[3] ?? ""),
+      });
+    }
     match = paragraphPattern.exec(bodyHtml);
   }
   return paragraphs;
@@ -170,8 +190,11 @@ interface GroupedProvision {
 function groupProvisions(paragraphs: readonly RawParagraph[]): readonly GroupedProvision[] {
   const grouped: { sourceId: string | null; heading: string; contents: string[] }[] = [];
   for (const paragraph of paragraphs) {
-    if (paragraph.kind === "article") {
+    if (paragraph.role === "article") {
       grouped.push({ contents: [], heading: paragraph.text, sourceId: paragraph.sourceId });
+      continue;
+    }
+    if (paragraph.role === "structure") {
       continue;
     }
     const current = grouped.at(-1);
@@ -187,6 +210,14 @@ function datePartOf(value: string | null | undefined): string | null {
     return null;
   }
   return value.slice(0, 10);
+}
+
+// Returns the provision paragraphs exactly as the source rendered them, so an
+// assurance pass can compare them against what the extractor produced.
+export function sourceProvisionParagraphs(flightText: string): readonly RawParagraph[] {
+  const chunks = extractTextChunks(flightText);
+  const bodyHtml = chunks.find((chunk) => chunk.includes("prov-article")) ?? flightText;
+  return extractParagraphs(bodyHtml);
 }
 
 export interface VbplDraftEvidence {

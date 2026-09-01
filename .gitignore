@@ -10,8 +10,12 @@ Thumbs.db
 .pnpm-store/
 tmp/
 output/
-data/manual/*.json
-!data/manual/README.md
+# Working files only. The published pointer and the source manifest are part of
+# the deliverable: a fresh clone must know which release to serve, and must be
+# able to check the source store against its manifest (ADR-0005).
+data/manual/staging*.json
+data/manual/crawl-state.json
+data/manual/*.review-log.json
 
 # Source files stay on the operator disk (ADR-0005); only the manifest is committed.
 data/manual/sources/**

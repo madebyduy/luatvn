@@ -68,6 +68,17 @@ export class ManualDatasetRepository implements LegalReadRepository {
     }
   }
 
+  public async listCatalogVersions(
+    datasetReleaseId: DatasetReleaseId,
+    operation: LegalReadOperation,
+  ): Promise<readonly PublishedProvisionVersion[]> {
+    this.assertOperationActive(operation);
+    if (datasetReleaseId !== this.datasetReleaseId) {
+      return [];
+    }
+    return [...this.versionsByVersionId.values()];
+  }
+
   public async listPublishedProvisionVersions(
     provisionId: ProvisionId,
     datasetReleaseId: DatasetReleaseId,

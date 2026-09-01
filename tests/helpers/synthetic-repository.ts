@@ -13,6 +13,13 @@ export class SyntheticLegalReadRepository implements LegalReadRepository {
     private readonly amendments: readonly AmendmentRelation[] = [],
   ) {}
 
+  public async listCatalogVersions(
+    datasetReleaseId: DatasetReleaseId,
+    _operation: LegalReadOperation,
+  ): Promise<readonly PublishedProvisionVersion[]> {
+    return this.versions.filter((version) => version.datasetReleaseId === datasetReleaseId);
+  }
+
   public async listPublishedProvisionVersions(
     provisionId: ProvisionId,
     datasetReleaseId: DatasetReleaseId,
@@ -71,6 +78,13 @@ function rejectWhenAborted(signal: AbortSignal): Promise<never> {
 }
 
 export class AbortAwareSyntheticLegalReadRepository implements LegalReadRepository {
+  public listCatalogVersions(
+    _datasetReleaseId: DatasetReleaseId,
+    operation: LegalReadOperation,
+  ): Promise<readonly PublishedProvisionVersion[]> {
+    return rejectWhenAborted(operation.signal);
+  }
+
   public listPublishedProvisionVersions(
     _provisionId: ProvisionId,
     _datasetReleaseId: DatasetReleaseId,

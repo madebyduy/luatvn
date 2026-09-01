@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { decodeManualDatasetFile, type ManualDatasetFile } from "./dataset-schema.js";
 import { decodeReleaseManifest, type ReleaseManifest } from "./release-manifest.js";
+import type { ReviewAuditEntry } from "./review.js";
 import {
   sha256HexOfBytes,
   sha256HexOfText,
@@ -26,6 +27,8 @@ export type ReleaseStoreErrorCode =
   | "RELEASE_NOT_REVIEWED"
   | "RELEASE_FILES_MISSING"
   | "RELEASE_FILE_HASH_MISMATCH"
+  | "REVIEW_LOG_INVALID"
+  | "SOURCE_PATH_INVALID"
   | "ROLLBACK_UNAVAILABLE";
 
 export class ReleaseStoreError extends Error {
@@ -41,6 +44,8 @@ export class ReleaseStoreError extends Error {
 
 const datasetFileName = "dataset.json";
 const manifestFileName = "manifest.json";
+export const reviewLogFileName = "review-log.json";
+export const sourceArchiveDirectory = "sources";
 const maximumPointerHistory = 32;
 
 const publishedPointerSchema = z
@@ -54,21 +59,51 @@ const publishedPointerSchema = z
 
 export type PublishedPointer = z.infer<typeof publishedPointerSchema>;
 
+const reviewLogSchema = z.array(
+  z
+    .object({
+      reviewedAt: z.string().min(1).max(32),
+      reviewedBy: z.string().min(1).max(256),
+      target: z.string().min(1).max(128),
+    })
+    .strict(),
+);
+
 export interface LoadedRelease {
   readonly datasetReleaseId: DatasetReleaseId;
   readonly dataset: ManualDatasetFile;
   readonly manifest: ReleaseManifest;
+  // Every file the manifest lists, already checked against its recorded hash.
+  // Present only when the caller asks for attachments; the runtime does not
+  // need the archived sources in memory to answer queries.
+  readonly files: ReadonlyMap<string, Uint8Array>;
+  readonly reviewLog: readonly ReviewAuditEntry[];
+}
+
+export interface ReleaseAttachment {
+  readonly path: string;
+  readonly bytes: Uint8Array;
 }
 
 export interface PublishReleaseOptions {
   readonly reviewedBy: string;
   readonly now?: IsoInstant;
   readonly allowedHosts?: readonly string[];
+  // Exact bytes of the sources the records were derived from. Archiving them
+  // inside the release is what lets a third party re-derive the text instead of
+  // taking the operator's word for it.
+  readonly sources?: readonly ReleaseAttachment[];
+  // Who promoted which record and when. Without this the release records a
+  // single reviewer name and loses the per-record trail.
+  readonly reviewLog?: readonly ReviewAuditEntry[];
 }
 
 export interface LoadReleaseOptions {
   readonly now?: IsoInstant;
   readonly allowedHosts?: readonly string[];
+  // Manifest hashes are always checked; attachment bytes are only retained when
+  // asked for, so a normal startup does not hold archived sources in memory.
+  readonly includeAttachments?: boolean;
 }
 
 function pointerPath(dataDirectory: string): string {
@@ -246,6 +281,32 @@ async function loadReleaseById(
   }
   const dataset = datasetResult.value;
 
+  let reviewLog: readonly ReviewAuditEntry[] = [];
+  const reviewLogBytes = bytesByPath.get(reviewLogFileName);
+  if (reviewLogBytes !== undefined) {
+    let reviewLogJson: unknown;
+    try {
+      reviewLogJson = JSON.parse(stripByteOrderMark(Buffer.from(reviewLogBytes).toString("utf8")));
+    } catch {
+      throw new ReleaseStoreError(
+        "REVIEW_LOG_INVALID",
+        `Release ${releaseId} review log is not valid JSON`,
+      );
+    }
+    const parsedLog = reviewLogSchema.safeParse(reviewLogJson);
+    if (!parsedLog.success) {
+      throw new ReleaseStoreError(
+        "REVIEW_LOG_INVALID",
+        `Release ${releaseId} review log does not match the audit schema`,
+      );
+    }
+    reviewLog = parsedLog.data.map((entry) => ({
+      reviewedAt: parseIsoInstant(entry.reviewedAt),
+      reviewedBy: entry.reviewedBy,
+      target: entry.target,
+    }));
+  }
+
   if (dataset.datasetReleaseId !== manifest.datasetReleaseId) {
     throw new ReleaseStoreError(
       "MANIFEST_MISMATCH",
@@ -265,7 +326,13 @@ async function loadReleaseById(
     );
   }
 
-  return { datasetReleaseId: dataset.datasetReleaseId, dataset, manifest };
+  return {
+    datasetReleaseId: dataset.datasetReleaseId,
+    dataset,
+    files: options.includeAttachments === true ? bytesByPath : new Map<string, Uint8Array>(),
+    manifest,
+    reviewLog,
+  };
 }
 
 export async function publishRelease(
@@ -323,13 +390,36 @@ export async function publishRelease(
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, datasetFileName), normalizedText, "utf8");
 
+  const manifestFiles = [{ path: datasetFileName, sha256: sha256HexOfText(normalizedText) }];
+
+  for (const source of options.sources ?? []) {
+    const archivePath = `${sourceArchiveDirectory}/${source.path}`;
+    if (source.path.includes("/") || source.path.includes("..") || source.path.length === 0) {
+      throw new ReleaseStoreError(
+        "SOURCE_PATH_INVALID",
+        `Archived source name "${source.path}" must be a plain file name`,
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop -- archives are written in order so a failure leaves a partial release, not an interleaved one
+    await mkdir(join(directory, sourceArchiveDirectory), { recursive: true });
+    // eslint-disable-next-line no-await-in-loop -- archives are written in order so a failure leaves a partial release, not an interleaved one
+    await writeFile(join(directory, archivePath), source.bytes);
+    manifestFiles.push({ path: archivePath, sha256: sha256HexOfBytes(source.bytes) });
+  }
+
+  if (options.reviewLog !== undefined) {
+    const reviewLogText = `${JSON.stringify(options.reviewLog, null, 2)}\n`;
+    await writeFile(join(directory, reviewLogFileName), reviewLogText, "utf8");
+    manifestFiles.push({ path: reviewLogFileName, sha256: sha256HexOfText(reviewLogText) });
+  }
+
   const manifestCandidate = {
     schemaVersion: 1,
     datasetReleaseId: releaseId,
     releasedAt: now,
     reviewedBy,
     reviewState: "verified",
-    files: [{ path: datasetFileName, sha256: sha256HexOfText(normalizedText) }],
+    files: manifestFiles,
   };
   const manifestResult = decodeReleaseManifest(manifestCandidate);
   if (!manifestResult.ok) {

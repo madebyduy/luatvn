@@ -2,12 +2,17 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 
+import { loadPublishedRelease } from "@luatvn/manual-dataset";
+
 import {
+  checkExtraction,
   crawlIncremental,
+  detectProvisionDrift,
   DocumentFetcher,
   emptyIngestState,
   extractVbplDraft,
   extractVbplRelations,
+  vbplDocumentIdFromUrl,
   fetchVbplContentFlight,
   fetchVbplRelationsFlight,
   IngestError,
@@ -27,6 +32,7 @@ const usage = `Usage:
                     [--relations-action <id>] [--allow-hosts h1,h2]
   pnpm ingest crawl --seeds <url1,url2> --pattern <regex> --state <state.json>
                     --out <dir> --max <n> [--allow-hosts h1,h2] [--min-interval-ms n]
+  pnpm ingest drift <detail-url> [--data-dir <dir>] [--content-action <id>]
 
 fetch: store one document plus .evidence.json (URL, SHA-256, retrievedAt).
 draft: fetch a vbpl.vn detail payload and extract an under_review staging draft
@@ -35,6 +41,8 @@ draft: fetch a vbpl.vn detail payload and extract an under_review staging draft
        links provision-level amendment drafts.
 NOTE: original-document files ("Van ban goc"/"Tai ve") sit behind a CAPTCHA and
       are never fetched automatically - download those by hand.
+drift: re-fetch a document and compare it against the published release. It
+       proves the source changed, not that either side is legally correct.
 crawl: fetch seed pages, follow same-host links matching the pattern within the
        budget; unchanged documents (same SHA-256) produce no new evidence.
 --allow-hosts replaces the registered host list (SR-003) for drills/tests only.`;
@@ -158,7 +166,7 @@ async function runDraft(detailUrl, flags, withAmendments) {
         sourceSha256: payload.sourceSha256,
       },
     });
-    return { extracted, storedName };
+    return { extracted, payloadBytes: payload.bytes, storedName };
   };
 
   const primary = await draftOne(detailUrl);
@@ -225,6 +233,11 @@ async function runDraft(detailUrl, flags, withAmendments) {
     "utf8",
   );
 
+  const assurance = checkExtraction(
+    Buffer.from(primary.payloadBytes).toString("utf8"),
+    primary.extracted.draft.provisionVersions,
+  );
+
   const report = primary.extracted.report;
   out(`draft written: ${stagingPath}`);
   out(`  document: ${report.documentNumber} (${report.title.slice(0, 80)})`);
@@ -240,7 +253,58 @@ async function runDraft(detailUrl, flags, withAmendments) {
   for (const skip of report.skipped) {
     out(`  skipped: ${skip.locator} - ${skip.reason}`);
   }
+  if (assurance.length === 0) {
+    out("  assurance: source paragraphs fully covered, article numbering consistent");
+  } else {
+    for (const issue of assurance) {
+      out(`  ASSURANCE ${issue.code} ${issue.locator}: ${issue.message}`);
+    }
+  }
   out(`next: pnpm dataset review ${stagingPath}`);
+}
+
+async function runDrift(detailUrl, flags) {
+  const dataDirectory = flags.get("data-dir") ?? join("data", "manual");
+  const release = await loadPublishedRelease(dataDirectory);
+  const documentId = `doc_vbpl_${vbplDocumentIdFromUrl(detailUrl)}`;
+  const published = release.dataset.provisionVersions.filter(
+    (provision) => provision.documentId === documentId,
+  );
+  if (published.length === 0) {
+    fail(
+      `DOCUMENT_NOT_IN_RELEASE: ${documentId} is not part of release ${release.datasetReleaseId}`,
+    );
+    return;
+  }
+
+  const fetcher = new DocumentFetcher(fetcherOptionsFrom(flags));
+  const contentAction = flags.get("content-action");
+  const payload =
+    contentAction === undefined
+      ? await fetchVbplContentFlight(fetcher, detailUrl)
+      : await fetchVbplContentFlight(fetcher, detailUrl, contentAction);
+  const { draft } = extractVbplDraft(Buffer.from(payload.bytes).toString("utf8"), {
+    datasetReleaseId: release.datasetReleaseId,
+    evidence: {
+      officialSourceUrl: payload.officialSourceUrl,
+      retrievedAt: payload.retrievedAt,
+      sourceSha256: payload.sourceSha256,
+    },
+  });
+
+  const issues = detectProvisionDrift(published, draft.provisionVersions);
+  out(`drift check: ${documentId} in release ${release.datasetReleaseId}`);
+  out(
+    `  published provisions: ${published.length}, at source now: ${draft.provisionVersions.length}`,
+  );
+  if (issues.length === 0) {
+    out("  no drift: published text still matches the source");
+    return;
+  }
+  for (const issue of issues) {
+    fail(`  ${issue.code} ${issue.locator}: ${issue.message}`);
+  }
+  fail("  the published release is immutable - review the changes and publish a new release");
 }
 
 async function runCrawl(flags) {
@@ -300,6 +364,11 @@ async function run() {
     case "draft": {
       if (positional[0] === undefined) throw new Error(usage);
       await runDraft(positional[0], flags, flags.get("with-amendments") === "true");
+      return;
+    }
+    case "drift": {
+      if (positional[0] === undefined) throw new Error(usage);
+      await runDrift(positional[0], flags);
       return;
     }
     case "crawl": {

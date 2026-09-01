@@ -1,4 +1,17 @@
+# A release is hashed byte for byte, so git must never rewrite anything inside
+# it. Without this, git's line-ending conversion (core.autocrlf, the default on
+# Windows) silently changes the bytes on checkout and every release hash fails
+# on the machine that cloned it - the loader refuses to start, correctly.
+data/manual/** -text
+
+# Source payloads archived for re-derivation are evidence, not editable text.
+*.rsc.txt -text
+
+# Everything else stays normalised so the repo reads the same on every machine.
 * text=auto eol=lf
+
+# Binary assets git must never try to normalise. Restored after being lost when
+# this file was rewritten for the release rules above.
 *.pdf binary
 *.png binary
 *.jpg binary

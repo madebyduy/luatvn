@@ -3,6 +3,8 @@ import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import process from "node:process";
 
+import { verifyReleaseChain } from "@luatvn/ingest";
+
 import {
   buildSourceStoreManifest,
   decodeManualDatasetFile,
@@ -23,7 +25,8 @@ const usage = `Usage:
   pnpm dataset validate <staging-file.json> [--data-dir <dir>]
   pnpm dataset review   <staging-file.json>
   pnpm dataset promote  <staging-file.json> (--version <pv_id> | --amendment <amd_id>) --reviewed-by "<full name>"
-  pnpm dataset publish  <staging-file.json> --reviewed-by "<full name>" [--data-dir <dir>]
+  pnpm dataset publish  <staging-file.json> --reviewed-by "<full name>" [--data-dir <dir>] [--sources-dir <dir>]
+  pnpm dataset verify   [--data-dir <dir>] [--allow-hosts h1,h2]
   pnpm dataset sources  [--verify] [--dir <sources-dir>] [--manifest <manifest.json>]
   pnpm dataset rollback [--data-dir <dir>]
   pnpm dataset status   [--data-dir <dir>]
@@ -31,6 +34,10 @@ const usage = `Usage:
 The default data directory is data/manual. See docs/08-operator-runbook.md.
 promote is the only path that raises a record to verified; it appends an audit
 entry to <staging-file>.review-log.json.
+verify re-derives the legal text of the published release from the sources
+archived inside it and compares the hashes. It proves the text came from that
+archived source and that a named reviewer vouched for each record; it does not
+prove the source itself states the law correctly.
 sources rebuilds data/manual/sources-manifest.json from the local source store
 (ADR-0005: the files themselves never enter git); --verify checks the store
 against the committed manifest and exits 1 on any difference.`;
@@ -166,6 +173,19 @@ async function runPromote(file, flags) {
 const defaultSourcesDirectory = join("data", "manual", "sources");
 const defaultSourcesManifest = join("data", "manual", "sources-manifest.json");
 
+async function scanSourceFilePaths(directory) {
+  let entries;
+  try {
+    entries = await readdir(directory, { recursive: true, withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .filter((filePath) => !filePath.endsWith("README.md") && !filePath.endsWith(".evidence.json"));
+}
+
 async function scanSourceFiles(directory) {
   let entries;
   try {
@@ -237,14 +257,99 @@ async function runSources(flags, verify) {
   out(`source store verified: ${actual.length} file(s) match ${manifestPath}`);
 }
 
-async function runPublish(file, dataDirectory, reviewedBy) {
+async function readReviewLog(stagingFile) {
+  try {
+    const parsed = JSON.parse(await readFile(`${stagingFile}.review-log.json`, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// Attaches exactly the archived files whose bytes hash to an evidence hash used
+// by the dataset. Matching by hash rather than by file name means a renamed or
+// substituted archive simply fails to match instead of being trusted.
+async function collectArchivedSources(datasetText, sourcesDirectory) {
+  let dataset;
+  try {
+    dataset = JSON.parse(stripByteOrderMark(datasetText));
+  } catch {
+    return [];
+  }
+  const wanted = new Set();
+  for (const record of [...(dataset.provisionVersions ?? []), ...(dataset.amendments ?? [])]) {
+    for (const evidence of record.evidence ?? []) {
+      if (typeof evidence.sourceSha256 === "string") wanted.add(evidence.sourceSha256);
+    }
+  }
+  if (wanted.size === 0) return [];
+
+  const files = await scanSourceFilePaths(sourcesDirectory);
+  const attached = [];
+  const usedNames = new Set();
+  for (const filePath of files) {
+    // eslint-disable-next-line no-await-in-loop -- hashing candidate archives one at a time keeps memory flat on large source stores
+    const bytes = await readFile(filePath);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    if (!wanted.has(sha256)) continue;
+    let name = filePath.split(sep).pop() ?? sha256;
+    if (usedNames.has(name)) name = `${sha256.slice(0, 12)}-${name}`;
+    usedNames.add(name);
+    attached.push({ bytes, path: name });
+  }
+  return attached;
+}
+
+async function runPublish(file, dataDirectory, reviewedBy, flags) {
   if (reviewedBy === undefined) {
     fail('publish requires --reviewed-by "<full name>" naming the human reviewer');
     return;
   }
   const text = await readFile(file, "utf8");
-  const published = await publishRelease(dataDirectory, text, { reviewedBy });
+  const sourcesDirectory = flags.get("sources-dir") ?? defaultSourcesDirectory;
+  const sources = await collectArchivedSources(text, sourcesDirectory);
+  const reviewLog = await readReviewLog(file);
+
+  const published = await publishRelease(dataDirectory, text, {
+    reviewLog,
+    reviewedBy,
+    sources,
+  });
   out(`published release ${published.datasetReleaseId} to ${dataDirectory}`);
+  out(`  archived sources bundled: ${sources.length}`);
+  out(`  reviewer entries bundled: ${reviewLog.length}`);
+  if (sources.length === 0) {
+    out(
+      "  note: no archived source matched this dataset, so pnpm dataset verify cannot re-derive its text",
+    );
+  }
+}
+
+async function runVerify(dataDirectory, flags) {
+  const loadOptions = { includeAttachments: true };
+  const allowHosts = flags.get("allow-hosts");
+  if (allowHosts !== undefined) {
+    loadOptions.allowedHosts = allowHosts.split(",").map((host) => host.trim().toLowerCase());
+    out(`allow-hosts override active (drill/test only): ${loadOptions.allowedHosts.join(", ")}`);
+  }
+  const release = await loadPublishedRelease(dataDirectory, loadOptions);
+  const report = verifyReleaseChain(release);
+
+  out(`verifying release ${release.datasetReleaseId}`);
+  out(`  provisions: ${release.dataset.provisionVersions.length}`);
+  out(`  archived sources: ${report.archivedSources}`);
+  out(`  provisions re-derived from an archived source: ${report.derivedProvisions}`);
+  out(`  provisions vouched for by a named reviewer: ${report.vouchedProvisions}`);
+
+  if (report.issues.length > 0) {
+    fail(`VERIFICATION_FAILED: ${report.issues.length} broken link(s)`);
+    for (const issue of report.issues) {
+      fail(`  ${issue.code} ${issue.locator}: ${issue.message}`);
+    }
+    return;
+  }
+  out("chain intact: every record re-derives from its archived source and carries a reviewer");
+  out("note: this proves derivation and review, not that the source states the law correctly");
 }
 
 async function runRollback(dataDirectory) {
@@ -287,7 +392,11 @@ async function run() {
     }
     case "publish": {
       if (positional[0] === undefined) throw new Error(usage);
-      await runPublish(positional[0], dataDirectory, flags.get("reviewed-by"));
+      await runPublish(positional[0], dataDirectory, flags.get("reviewed-by"), flags);
+      return;
+    }
+    case "verify": {
+      await runVerify(dataDirectory, flags);
       return;
     }
     case "sources": {

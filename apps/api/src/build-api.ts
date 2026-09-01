@@ -7,6 +7,8 @@ import {
   CompareProvisionVersionsRequestSchema,
   CompareProvisionVersionsResponseSchema,
   ErrorResponseSchema,
+  GetCatalogRequestSchema,
+  GetCatalogResponseSchema,
   GetProvisionAtRequestSchema,
   GetProvisionAtResponseSchema,
   TraceAmendmentsRequestSchema,
@@ -125,6 +127,26 @@ export function buildApi(options: BuildApiOptions) {
       },
     },
     async () => ({ status: "ok" as const }),
+  );
+
+  app.post(
+    "/v1/catalog",
+    {
+      schema: {
+        body: GetCatalogRequestSchema,
+        response: {
+          200: GetCatalogResponseSchema,
+          400: ErrorResponseSchema,
+          408: ErrorResponseSchema,
+          409: ErrorResponseSchema,
+          500: ErrorResponseSchema,
+        },
+      },
+    },
+    async (request) =>
+      runWithExecution(request, operationTimeoutMs, (execution) =>
+        options.legalQueryService.getCatalog(request.body, execution),
+      ),
   );
 
   app.post(

@@ -79,6 +79,33 @@ export const TraceAmendmentsRequestSchema = z
   })
   .strict();
 
+export const GetCatalogRequestSchema = z.object({ context: QueryContextSchema }).strict();
+
+const CatalogVersionSchema = z
+  .object({
+    provisionVersionId: ProvisionVersionIdSchema,
+    reviewStatus: z.enum(["verified", "under_review", "unverified"]),
+    validFrom: LegalDateSchema,
+    validTo: LegalDateSchema.nullable(),
+  })
+  .strict();
+
+const CatalogProvisionSchema = z
+  .object({
+    heading: z.string().max(1_024).nullable(),
+    provisionId: ProvisionIdSchema,
+    versions: z.array(CatalogVersionSchema).readonly(),
+  })
+  .strict();
+
+const CatalogDocumentSchema = z
+  .object({
+    documentId: z.string().regex(/^doc_/u).regex(safeIdentifierPattern),
+    documentNumber: z.string().min(1).max(256),
+    provisions: z.array(CatalogProvisionSchema).readonly(),
+  })
+  .strict();
+
 export const EvidenceSchema = z
   .object({
     evidenceId: z.string().regex(/^ev_/u).regex(safeIdentifierPattern),
@@ -216,6 +243,29 @@ export const TraceAmendmentsResponseSchema = z
   })
   .strict();
 
+export const GetCatalogResponseSchema = z
+  .object({
+    data: z
+      .object({
+        documents: z.array(CatalogDocumentSchema).readonly(),
+        status: z.literal("resolved"),
+      })
+      .strict(),
+    release: ReleaseSchema,
+    untrustedContent: z.literal(true),
+    warnings: WarningSchema,
+  })
+  .strict();
+
+export type GetCatalogRequest = z.infer<typeof GetCatalogRequestSchema>;
+export type GetCatalogResponse = z.infer<typeof GetCatalogResponseSchema>;
 export type GetProvisionAtRequest = z.infer<typeof GetProvisionAtRequestSchema>;
 export type CompareProvisionVersionsRequest = z.infer<typeof CompareProvisionVersionsRequestSchema>;
 export type TraceAmendmentsRequest = z.infer<typeof TraceAmendmentsRequestSchema>;
+
+export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
+export type GetProvisionAtResponse = z.infer<typeof GetProvisionAtResponseSchema>;
+export type CompareProvisionVersionsResponse = z.infer<
+  typeof CompareProvisionVersionsResponseSchema
+>;
+export type TraceAmendmentsResponse = z.infer<typeof TraceAmendmentsResponseSchema>;

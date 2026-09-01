@@ -1,4 +1,4 @@
-import { LegalQueryService } from "@luatvn/application";
+import { LegalQueryService, maximumCatalogVersions } from "@luatvn/application";
 import { parseEvidenceId, parseIsoInstant, type PublishedProvisionVersion } from "@luatvn/domain";
 import { describe, expect, it } from "vitest";
 
@@ -190,5 +190,32 @@ describe("LegalQueryService", () => {
         execution,
       ),
     ).rejects.toMatchObject({ code: "RESULT_LIMIT_EXCEEDED" });
+  });
+  it("groups the catalog by document and orders versions by their start date", async () => {
+    const catalogService = new LegalQueryService(
+      new SyntheticLegalReadRepository([syntheticVersionTwo, syntheticVersionOne]),
+    );
+    const result = await catalogService.getCatalog({ context }, execution);
+    if (result.data.status !== "resolved") {
+      throw new Error("expected a resolved catalog");
+    }
+    expect(result.data.documents).toHaveLength(1);
+    const [document] = result.data.documents;
+    expect(document?.documentNumber).toBe(syntheticVersionOne.documentNumber);
+    const [provision] = document?.provisions ?? [];
+    expect(provision?.provisionId).toBe(syntheticProvisionId);
+    expect(provision?.versions.map((version) => version.validFrom)).toEqual([
+      syntheticVersionOne.validTime.from,
+      syntheticVersionTwo.validTime.from,
+    ]);
+    expect(result.untrustedContent).toBe(true);
+  });
+
+  it("refuses a catalog larger than the public limit", async () => {
+    const oversized = Array.from({ length: maximumCatalogVersions + 1 }, () => syntheticVersionOne);
+    const oversizedService = new LegalQueryService(new SyntheticLegalReadRepository(oversized));
+    await expect(oversizedService.getCatalog({ context }, execution)).rejects.toMatchObject({
+      code: "RESULT_LIMIT_EXCEEDED",
+    });
   });
 });
