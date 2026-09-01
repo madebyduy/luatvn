@@ -6,5 +6,15 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../domain" }, { "path": "../manual-dataset" }]
+  "references": [
+    {
+      "path": "../domain"
+    },
+    {
+      "path": "../manual-dataset"
+    },
+    {
+      "path": "../pdf-text"
+    }
+  ]
 }

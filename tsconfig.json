@@ -14,6 +14,9 @@
       "path": "packages/manual-dataset"
     },
     {
+      "path": "packages/pdf-text"
+    },
+    {
       "path": "packages/ingest"
     },
     {

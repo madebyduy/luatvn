@@ -4,8 +4,14 @@ import process from "node:process";
 
 import { loadPublishedRelease } from "@luatvn/manual-dataset";
 
+import { extractPdfLines, PdfTextError } from "@luatvn/pdf-text";
+
 import {
   checkExtraction,
+  CongBaoExtractError,
+  CongBaoPageError,
+  extractCongBaoDraft,
+  readCongBaoDetailPage,
   crawlIncremental,
   detectProvisionDrift,
   DocumentFetcher,
@@ -33,6 +39,8 @@ const usage = `Usage:
   pnpm ingest crawl --seeds <url1,url2> --pattern <regex> --state <state.json>
                     --out <dir> --max <n> [--allow-hosts h1,h2] [--min-interval-ms n]
   pnpm ingest drift <detail-url> [--data-dir <dir>] [--content-action <id>]
+  pnpm ingest congbao <detail-url> --release <rel_id> --out <staging.json>
+                    [--sources-dir <dir>] [--allow-hosts h1,h2]
 
 fetch: store one document plus .evidence.json (URL, SHA-256, retrievedAt).
 draft: fetch a vbpl.vn detail payload and extract an under_review staging draft
@@ -43,6 +51,10 @@ NOTE: original-document files ("Van ban goc"/"Tai ve") sit behind a CAPTCHA and
       are never fetched automatically - download those by hand.
 drift: re-fetch a document and compare it against the published release. It
        proves the source changed, not that either side is legally correct.
+congbao: read a congbao.chinhphu.vn detail page, fetch the signed PDF it points
+       at, and extract an under_review draft from the PDF text layer. The page
+       itself carries no legal text. A document whose effective date the gazette
+       leaves blank is refused, not guessed.
 crawl: fetch seed pages, follow same-host links matching the pattern within the
        budget; unchanged documents (same SHA-256) produce no new evidence.
 --allow-hosts replaces the registered host list (SR-003) for drills/tests only.`;
@@ -263,6 +275,62 @@ async function runDraft(detailUrl, flags, withAmendments) {
   out(`next: pnpm dataset review ${stagingPath}`);
 }
 
+async function runCongBao(detailUrl, flags) {
+  const datasetReleaseId = flags.get("release");
+  const stagingPath = flags.get("out");
+  if (datasetReleaseId === undefined || stagingPath === undefined) {
+    throw new Error(usage);
+  }
+  const sourcesDirectory =
+    flags.get("sources-dir") ?? join("data", "manual", "sources", "incoming");
+  const fetcher = new DocumentFetcher(fetcherOptionsFrom(flags));
+
+  const page = await fetcher.fetchDocument(detailUrl);
+  const reference = readCongBaoDetailPage(Buffer.from(page.bytes).toString("utf8"));
+  out(`trang chi tiết: ${reference.documentNumber} - ${reference.locator}`);
+
+  // The signed PDF is the legal artifact; the page is a record card for it.
+  const pdf = await fetcher.fetchDocument(reference.pdfUrl);
+  const storedName = await storeDocument(pdf, sourcesDirectory, reference.pdfUrl);
+  const text = await extractPdfLines(new Uint8Array(pdf.bytes));
+  const { draft, report } = extractCongBaoDraft(text, {
+    datasetReleaseId,
+    evidence: {
+      locator: reference.locator,
+      officialSourceUrl: pdf.officialSourceUrl,
+      retrievedAt: pdf.retrievedAt,
+      sourceSha256: pdf.sourceSha256,
+    },
+    reference,
+  });
+
+  await writeFile(stagingPath, `${JSON.stringify(draft, null, 2)}\n`, "utf8");
+  const characters = draft.provisionVersions.reduce(
+    (total, version) => total + version.legalText.length,
+    0,
+  );
+  out(
+    [
+      `draft: ${stagingPath}`,
+      `  ${report.title}`,
+      `  ${String(report.provisionCount)} Điều (${String(report.articleNumbers[0])}..${String(report.articleNumbers.at(-1))}), ${String(characters)} ký tự nguyên văn`,
+      `  hiệu lực từ ${report.effectiveFrom}; mọi record ở trạng thái under_review`,
+      `  PDF nguồn: ${storedName} (${pdf.sourceSha256})`,
+      `  cỡ chữ thân bài ${String(report.bodyFontSize)}; bỏ ${String(report.runningLines.length)} dòng header lặp, giữ riêng ${String(report.apparatusLines.length)} dòng chú thích`,
+    ].join("\n"),
+  );
+  if (report.unassignedLines.length > 0) {
+    // Reported rather than hidden: these are usually chapter titles and the
+    // signature block, but a reviewer must be able to see what was not placed.
+    out(
+      `  ${String(report.unassignedLines.length)} dòng không thuộc Điều nào, cần người review xem:`,
+    );
+    for (const line of report.unassignedLines) {
+      out(`    tr.${String(line.page)}: ${line.text}`);
+    }
+  }
+}
+
 async function runDrift(detailUrl, flags) {
   const dataDirectory = flags.get("data-dir") ?? join("data", "manual");
   const release = await loadPublishedRelease(dataDirectory);
@@ -323,6 +391,17 @@ async function runCrawl(flags) {
     throw new Error(usage);
   }
 
+  // Git Bash on Windows rewrites an argument that looks like a Unix path, so
+  // --pattern "/van-ban/" arrives as "C:/Program Files/Git/van-ban/". The crawl
+  // then matches nothing and reports "0 fetched", which reads exactly like the
+  // source blocking us. Refuse instead of crawling on a mangled pattern.
+  if (/^[A-Za-z]:[\\/]/u.test(pattern)) {
+    throw new Error(
+      `--pattern looks like a Windows path ("${pattern}"), not a URL pattern. Git Bash rewrote it. ` +
+        `Prefix the command with MSYS_NO_PATHCONV=1, or drop the leading slash (e.g. "van-ban/").`,
+    );
+  }
+
   let state = emptyIngestState();
   try {
     state = ingestStateSchema.parse(JSON.parse(await readFile(statePath, "utf8")));
@@ -375,6 +454,11 @@ async function run() {
       await runCrawl(flags);
       return;
     }
+    case "congbao": {
+      if (positional[0] === undefined) throw new Error(usage);
+      await runCongBao(positional[0], flags);
+      return;
+    }
     default: {
       throw new Error(usage);
     }
@@ -385,7 +469,10 @@ run().catch((error) => {
   if (
     error instanceof IngestError ||
     error instanceof VbplExtractError ||
-    error instanceof MergeDraftsError
+    error instanceof MergeDraftsError ||
+    error instanceof CongBaoPageError ||
+    error instanceof CongBaoExtractError ||
+    error instanceof PdfTextError
   ) {
     fail(error.code === undefined ? error.message : `${error.code}: ${error.message}`);
     return;

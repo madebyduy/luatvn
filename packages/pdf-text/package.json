@@ -1,5 +1,5 @@
 {
-  "name": "@luatvn/ingest",
+  "name": "@luatvn/pdf-text",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -13,9 +13,6 @@
     "dist"
   ],
   "dependencies": {
-    "@luatvn/domain": "workspace:*",
-    "@luatvn/manual-dataset": "workspace:*",
-    "zod": "4.4.1",
-    "@luatvn/pdf-text": "workspace:*"
+    "pdfjs-dist": "6.3.289"
   }
 }

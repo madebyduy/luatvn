@@ -107,6 +107,27 @@ pnpm ingest crawl --seeds "https://vbpl.vn/sitemap/1.xml" --pattern "/van-ban/ch
 - Lưu ý: `Next-Action` id của vbpl.vn đổi khi site redeploy; nếu `draft` trả lỗi METADATA_NOT_FOUND, lấy id mới và truyền `--content-action` (và `--relations-action` cho tab Lược đồ).
 - **File gốc (PDF) không được cào tự động**: tab "Văn bản gốc"/"Tải về" của vbpl.vn có reCAPTCHA. Người vận hành tự mở trình duyệt tải file gốc về `data/manual/sources/<release>/` rồi ghi SHA-256 vào evidence. Đây là ranh giới cứng ghi tại [ADR-0004](./decisions/0004-ingest-crawler-before-build.md), không được lách.
 
+## 1c. Ingest từ Công báo qua PDF ký số (P-017)
+
+Dùng khi nguồn là congbao.chinhphu.vn. Khác với vbpl.vn: trang chi tiết **không chứa nguyên văn**, nó chỉ trỏ tới file PDF ký số (SR-005). Máy tải PDF đó rồi bóc text từ lớp text của file.
+
+```bash
+pnpm ingest congbao "https://congbao.chinhphu.vn/van-ban/<slug>-<id>.htm" --release rel_xxx --out data/manual/staging-rel-xxx.json
+```
+
+Kết quả in ra: số Điều bóc được kèm dải số, tổng ký tự nguyên văn, ngày hiệu lực lấy từ Công báo, tên file PDF đã lưu kèm SHA-256, và **danh sách dòng không thuộc Điều nào**. Dòng cuối cùng đó phải đọc: thường là tiêu đề Chương viết hoa và khối chữ ký, nhưng nếu thấy nội dung điều khoản nằm trong đó thì bộ bóc đã sai, đừng promote.
+
+Bốn trường hợp máy **từ chối** thay vì đoán:
+
+| Mã lỗi                      | Nghĩa                                                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EFFECTIVE_DATE_NOT_STATED` | Công báo bỏ trống ngày hiệu lực. Hay gặp ở **văn bản hợp nhất** - loại này không có hiệu lực riêng, hiệu lực thuộc về các văn bản được hợp nhất. Người review phải tự xác định. |
+| `ARTICLE_NUMBERS_BROKEN`    | Số Điều không liên tục. Nghĩa là bóc mất một Điều hoặc nhận nhầm chú thích thành tiêu đề. Không sinh draft.                                                                     |
+| `PDF_HAS_NO_TEXT_LAYER`     | PDF là bản scan. Phải nhập tay; hệ thống không có OCR.                                                                                                                          |
+| `PDF_LINK_NOT_FOUND`        | Trang Công báo đã đổi cấu trúc. Lấy URL PDF thủ công rồi báo để sửa bộ đọc trang.                                                                                               |
+
+Sau đó vẫn đi đúng đường cũ: `pnpm dataset review` để xem, `pnpm dataset promote` từng record, rồi validate và publish (mục 2-3). Máy không tự đặt `verified`.
+
 ## 4b. Kiểm chứng độc lập (P-025)
 
 ```bash
