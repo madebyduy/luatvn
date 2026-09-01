@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "warn",
+    "suspicious": "error"
+  },
+  "ignorePatterns": ["dist/**", "node_modules/**", "output/**", "tmp/**"],
+  "rules": {
+    "eqeqeq": "error",
+    "no-console": "error",
+    "no-debugger": "error",
+    "no-throw-literal": "error",
+    "oxc/no-async-endpoint-handlers": "off",
+    "prefer-const": "error"
+  }
+}

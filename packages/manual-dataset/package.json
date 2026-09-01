@@ -1,0 +1,20 @@
+{
+  "name": "@luatvn/manual-dataset",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@luatvn/application": "workspace:*",
+    "@luatvn/domain": "workspace:*",
+    "zod": "4.4.1"
+  }
+}

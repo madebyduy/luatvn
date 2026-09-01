@@ -1,0 +1,23 @@
+{
+  "name": "@luatvn/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@luatvn/application": "workspace:*",
+    "@luatvn/contracts": "workspace:*",
+    "@luatvn/manual-dataset": "workspace:*",
+    "fastify": "5.12.1",
+    "fastify-type-provider-zod": "7.0.0",
+    "zod": "4.4.1"
+  }
+}

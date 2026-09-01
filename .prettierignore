@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+tmp
+output
+pnpm-lock.yaml
+docs/reference/*.pdf
