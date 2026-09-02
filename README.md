@@ -66,9 +66,9 @@ pnpm dataset verify
 
 Lệnh này **dựng lại nguyên văn từ chính bytes nguồn đã lưu** rồi so hash. Hash không thôi thì giả được — sửa nguyên văn rồi vá lại mọi digest. Suy dẫn thì không: văn bản đã sửa sẽ không còn dựng ra được từ nguồn của nó. Nó cũng đòi mỗi bản ghi `verified` phải có tên người duyệt và thời điểm duyệt.
 
-Ba trạng thái được phân biệt rõ, không gộp: *chưa có bản sao cục bộ* (chưa kiểm được) / *có và khớp* / *có nhưng sai hash* (đã bị sửa).
+Ba trạng thái được phân biệt rõ, không gộp: _chưa có bản sao cục bộ_ (chưa kiểm được) / _có và khớp_ / _có nhưng sai hash_ (đã bị sửa).
 
-Giới hạn phải nói rõ: nó chứng minh **nguyên văn suy ra được từ nguồn đã lưu và có người chịu trách nhiệm**. Nó *không* chứng minh bản thân nguồn nói đúng luật — việc đó vẫn phải mở URL nguồn chính thức trong evidence để đối chiếu.
+Giới hạn phải nói rõ: nó chứng minh **nguyên văn suy ra được từ nguồn đã lưu và có người chịu trách nhiệm**. Nó _không_ chứng minh bản thân nguồn nói đúng luật — việc đó vẫn phải mở URL nguồn chính thức trong evidence để đối chiếu.
 
 Bytes nguồn nằm trong kho dùng chung, đặt tên bằng chính SHA-256 của nội dung, nên một văn bản tải một lần được lưu một lần dù bao nhiêu release trỏ tới.
 
