@@ -45,7 +45,11 @@ export class ReleaseStoreError extends Error {
 const datasetFileName = "dataset.json";
 const manifestFileName = "manifest.json";
 export const reviewLogFileName = "review-log.json";
-export const sourceArchiveDirectory = "sources";
+// The published evidence store, shared by every release and content-addressed.
+// Deliberately not "sources": that directory is the operator working area for
+// raw downloads, which ADR-0005 keeps out of git. This one is evidence and
+// travels with the releases that cite it.
+export const sourceArchiveDirectory = "archive";
 const maximumPointerHistory = 32;
 
 const publishedPointerSchema = z
@@ -77,6 +81,11 @@ export interface LoadedRelease {
   // Present only when the caller asks for attachments; the runtime does not
   // need the archived sources in memory to answer queries.
   readonly files: ReadonlyMap<string, Uint8Array>;
+  /**
+   * Archives the manifest lists that have no local copy. Empty under the
+   * "required" policy, because loading would have failed instead.
+   */
+  readonly missingArchives: readonly string[];
   readonly reviewLog: readonly ReviewAuditEntry[];
 }
 
@@ -98,7 +107,19 @@ export interface PublishReleaseOptions {
   readonly reviewLog?: readonly ReviewAuditEntry[];
 }
 
+export type ArchivePolicy = "required" | "optional";
+
 export interface LoadReleaseOptions {
+  /**
+   * "required" (the default) keeps today's guarantee: a release that loads is a
+   * release whose every archived source is present and intact. "optional" lets
+   * a machine serve queries without carrying the archive - which is 52 times
+   * heavier than the data queries actually need - and reports exactly which
+   * archives are absent. Never silently: absent is recorded, and a present file
+   * whose bytes do not match its digest still refuses to load, because that is
+   * tampering rather than a missing copy.
+   */
+  readonly archivePolicy?: ArchivePolicy;
   readonly now?: IsoInstant;
   readonly allowedHosts?: readonly string[];
   // Manifest hashes are always checked; attachment bytes are only retained when
@@ -231,6 +252,8 @@ async function loadReleaseById(
     );
   }
 
+  // Files the release cannot be served without. Absent or altered means the
+  // release does not load, under every policy.
   const fileEntries = await Promise.all(
     manifest.files.map(async (file) => {
       try {
@@ -252,6 +275,42 @@ async function loadReleaseById(
       );
     }
     bytesByPath.set(file.path, bytes);
+  }
+
+  // Archived sources live in one store shared by every release. Answering a
+  // query never reads them; only re-deriving the text from its source does.
+  const archivePolicy = options.archivePolicy ?? "required";
+  const archiveDirectory = join(dataDirectory, sourceArchiveDirectory);
+  const missingArchives: string[] = [];
+  const archiveEntries = await Promise.all(
+    manifest.archives.map(async (archive) => {
+      try {
+        return { archive, bytes: await readFile(join(archiveDirectory, archive.path)) };
+      } catch {
+        return { archive, bytes: null };
+      }
+    }),
+  );
+  for (const { archive, bytes } of archiveEntries) {
+    if (bytes === null) {
+      if (archivePolicy === "required") {
+        throw new ReleaseStoreError(
+          "RELEASE_FILES_MISSING",
+          `Release ${releaseId} has no local copy of archived source ${archive.path}; fetch it, or load with archivePolicy "optional" to serve queries without it`,
+        );
+      }
+      missingArchives.push(archive.path);
+      continue;
+    }
+    if (sha256HexOfBytes(bytes) !== archive.sha256) {
+      // A wrong copy is not a missing copy. This one is refused under every
+      // policy, because it means the bytes were altered after publication.
+      throw new ReleaseStoreError(
+        "RELEASE_FILE_HASH_MISMATCH",
+        `Archived source ${archive.path} does not match its SHA-256; the archive was mutated`,
+      );
+    }
+    bytesByPath.set(`${sourceArchiveDirectory}/${archive.path}`, bytes);
   }
 
   const datasetBytes = bytesByPath.get(datasetFileName);
@@ -331,6 +390,7 @@ async function loadReleaseById(
     dataset,
     files: options.includeAttachments === true ? bytesByPath : new Map<string, Uint8Array>(),
     manifest,
+    missingArchives,
     reviewLog,
   };
 }
@@ -392,19 +452,32 @@ export async function publishRelease(
 
   const manifestFiles = [{ path: datasetFileName, sha256: sha256HexOfText(normalizedText) }];
 
+  // Sources go to one store shared by every release, named by their own digest.
+  // Publishing the same document again writes nothing: the bytes are already
+  // there under the same name, and their hash proves it is the same document.
+  const manifestArchives: { path: string; sha256: string }[] = [];
+  const archiveDirectory = join(dataDirectory, sourceArchiveDirectory);
   for (const source of options.sources ?? []) {
-    const archivePath = `${sourceArchiveDirectory}/${source.path}`;
     if (source.path.includes("/") || source.path.includes("..") || source.path.length === 0) {
       throw new ReleaseStoreError(
         "SOURCE_PATH_INVALID",
         `Archived source name "${source.path}" must be a plain file name`,
       );
     }
-    // eslint-disable-next-line no-await-in-loop -- archives are written in order so a failure leaves a partial release, not an interleaved one
-    await mkdir(join(directory, sourceArchiveDirectory), { recursive: true });
-    // eslint-disable-next-line no-await-in-loop -- archives are written in order so a failure leaves a partial release, not an interleaved one
-    await writeFile(join(directory, archivePath), source.bytes);
-    manifestFiles.push({ path: archivePath, sha256: sha256HexOfBytes(source.bytes) });
+    const digest = sha256HexOfBytes(source.bytes);
+    const dot = source.path.lastIndexOf(".");
+    const extension = dot > 0 ? source.path.slice(dot) : "";
+    const archiveName = `${digest}${extension}`;
+    // eslint-disable-next-line no-await-in-loop -- one directory, created before the first write
+    await mkdir(archiveDirectory, { recursive: true });
+    // eslint-disable-next-line no-await-in-loop -- written in order so a failure leaves a partial store, not an interleaved one
+    if (!(await pathExists(join(archiveDirectory, archiveName)))) {
+      // eslint-disable-next-line no-await-in-loop -- see above
+      await writeFile(join(archiveDirectory, archiveName), source.bytes);
+    }
+    if (!manifestArchives.some((entry) => entry.sha256 === digest)) {
+      manifestArchives.push({ path: archiveName, sha256: digest });
+    }
   }
 
   if (options.reviewLog !== undefined) {
@@ -420,6 +493,7 @@ export async function publishRelease(
     reviewedBy,
     reviewState: "verified",
     files: manifestFiles,
+    archives: manifestArchives,
   };
   const manifestResult = decodeReleaseManifest(manifestCandidate);
   if (!manifestResult.ok) {

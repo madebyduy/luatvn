@@ -157,7 +157,21 @@ Lệnh này đi đúng đường thật: bóc tách → người duyệt từng 
 
 ## 4d. Chuyển sang máy khác (ADR-0007)
 
-Bản phát hành là thứ duy nhất bắt buộc đi theo. Kho nguồn thô và file nháp ở lại máy cũ.
+Bản phát hành là thứ duy nhất bắt buộc đi theo. File nháp ở lại máy cũ.
+
+Cấu trúc trên đĩa:
+
+```
+data/manual/
+├── published.json              ← con trỏ: đang phục vụ release nào
+├── archive/<sha256>.<ext>      ← kho bằng chứng, dùng chung mọi release
+└── releases/<rel_id>/
+    ├── dataset.json            ← nguyên văn + bằng chứng
+    ├── manifest.json           ← hash từng file, và hash từng bản lưu trữ
+    └── review-log.json         ← ai duyệt record nào, lúc nào
+```
+
+`archive/` đặt tên file bằng chính SHA-256 của nội dung, nên một văn bản tải một lần được lưu một lần dù bao nhiêu release trỏ tới. Đừng nhầm với `data/manual/sources/` - chỗ đó là nơi nháp của người vận hành, nằm ngoài git (ADR-0005).
 
 Trên máy mới:
 

@@ -86,6 +86,55 @@ Ràng buộc cứng, và chỉ một ràng buộc: **`publish` phải đóng bă
 
 Ngưỡng nên đưa Postgres vào (bất kỳ điều nào tới trước): cần tìm kiếm toàn văn tiếng Việt thật sự (`tsvector` + `unaccent`), có từ hai người biên tập trở lên cùng lúc, hoặc corpus vượt bức tường bộ nhớ ở mục Context. Trước những mốc đó, Postgres chỉ thêm một tiến trình phải cài trên mọi máy - đi ngược đúng yêu cầu "máy nào cũng chạy được".
 
+**3c. Chi phí sao chép: nặng nằm ở kho nguồn, không nằm ở dữ liệu.**
+
+Đo trên Nghị định 327/2026/NĐ-CP, văn bản thật, 16 Điều (2026-09-01):
+
+|                                        | Kích thước |
+| -------------------------------------- | ---------- |
+| PDF nguồn                              | 797 KB     |
+| PDF nén gzip                           | 486 KB     |
+| dataset JSON (nguyên văn + bằng chứng) | 71 KB      |
+| dataset JSON nén gzip                  | **12 KB**  |
+
+Tức là 4,5 KB JSON mỗi Điều, còn 0,8 KB sau khi nén. Suy ra toàn corpus 172.117 văn bản (`Hypothesis`: giả định 20 Điều/văn bản, chưa đo phân bố thật):
+
+| Lớp              | Dung lượng |
+| ---------------- | ---------- |
+| dataset JSON thô | 15,7 GB    |
+| dataset JSON nén | **2,7 GB** |
+| kho PDF nguồn    | 140,6 GB   |
+| kho PDF nén      | 85,7 GB    |
+
+**Kho PDF nặng gấp 52 lần phần dữ liệu cần để chạy.** Đây là con số quyết định: thứ bắt buộc đi theo người dùng là 2,7 GB, còn 140 GB kia chỉ cần khi có người muốn _kiểm chứng lại_.
+
+Quy đổi sang ngưỡng thực dụng, nếu release vẫn đóng gói kèm PDF và commit vào git: vượt mốc 1 GB ở khoảng **1.200 văn bản**. Git giữ mọi phiên bản mãi mãi nên con số đó chỉ đi lên, không đi xuống.
+
+**Điểm yếu này ĐÃ SỬA 2026-09-01.** Mô tả dưới đây giữ lại để hiểu vì sao phải đổi.
+
+**Trạng thái cũ.** `loadReleaseById` đọc và băm **mọi** file có tên trong manifest, gồm cả PDF nguồn. Tuỳ chọn `includeAttachments` chỉ quyết định có _giữ lại bytes trong bộ nhớ_ hay không, không quyết định có _đọc_ hay không. Hệ quả: hôm nay không thể chạy hệ thống nếu thiếu kho nguồn, dù để trả lời truy vấn thì không cần đến nó.
+
+Cách đã làm: chia manifest thành hai loại file.
+
+- **Bắt buộc để phục vụ** (`dataset.json`, `review-log.json`): luôn đọc và băm khi load. Thiếu hoặc lệch hash thì từ chối khởi động như hiện nay.
+- **Kho lưu trữ** (`sources/**`): manifest vẫn ghi hash, nhưng bytes được phép vắng mặt. Load vẫn chạy; `verify` phải phân biệt rõ **"chưa có bản sao cục bộ"** với **"có nhưng sai hash"** - hai chuyện khác hẳn nhau, và không được gộp thành một chữ "pass".
+
+Đánh đổi phải nói thẳng: hôm nay "release load được" đồng nghĩa "toàn bộ bằng chứng còn nguyên vẹn". Sau khi tách, load được không còn chứng minh điều đó nữa - chỉ `verify` mới chứng minh. Vì thế bộ nạp bắt buộc phải **báo ra** những file kho đang vắng mặt, chứ không được im lặng.
+
+**Làm ngay chứ không hoãn, vì bản phát hành là bất biến.** Release đã publish thì không migrate được: nếu phát hành 50 release theo bố cục cũ rồi mới đổi, 50 release đó giữ bố cục cũ vĩnh viễn và bộ nạp phải hiểu cả hai kiểu mãi mãi. Thời điểm đổi rẻ nhất là khi có **0 release** - đúng lúc này.
+
+Và hoá ra không phải đánh đổi gì: **nghiêm ngặt vẫn là mặc định**, chỉ nới khi người vận hành chủ động yêu cầu.
+
+| Tình huống                | `archivePolicy: "required"` (mặc định) | `archivePolicy: "optional"`                       |
+| ------------------------- | -------------------------------------- | ------------------------------------------------- |
+| kho đủ và khớp hash       | nạp được                               | nạp được                                          |
+| kho **vắng mặt**          | **từ chối nạp**                        | nạp được, liệt kê file vắng tại `missingArchives` |
+| kho có nhưng **sai hash** | **từ chối nạp**                        | **từ chối nạp**                                   |
+
+Dòng cuối là điều kiện không thương lượng: vắng mặt nghĩa là _chưa lấy về_, sai hash nghĩa là _đã bị sửa_. `verify` cũng tách hai chuyện đó ra: mã `ARCHIVE_NOT_PRESENT` kèm `uncheckedProvisions` cho biết bao nhiêu bản ghi **chưa kiểm được** - khác hẳn với đã kiểm và đạt.
+
+Kho nằm tại `data/manual/archive/<sha256>.<ext>`, dùng chung cho mọi release. Publish lại cùng một văn bản không ghi thêm bản sao nào. Thư mục này khác `data/manual/sources/` - chỗ đó vẫn là nơi nháp của người vận hành và vẫn nằm ngoài git theo ADR-0005.
+
 **4. Khi nào cần object storage.**
 
 Khi tổng bản phát hành vượt khoảng **1 GB**, hoặc khi cần phát cho người ngoài tải: chuyển bundle sang object storage, giữ lại trong git đúng con trỏ và hash. Ưu tiên nhà cung cấp có S3 API và không tính phí egress. Lúc đó máy mới chạy một lệnh tải bundle theo hash rồi verify - vẫn không phải tin nhà cung cấp.
@@ -102,3 +151,4 @@ Khi tổng bản phát hành vượt khoảng **1 GB**, hoặc khi cần phát c
 - **STO-001**: nơi sao lưu kho nguồn thô (ADR-0005 để trống). Cần một địa điểm cụ thể và một lịch cụ thể.
 - **STO-002**: có mở private remote thứ hai làm bản sao lưu cho repo hay không. Hiện repo riêng chỉ tồn tại trên một máy.
 - **STO-003**: khi vượt ngưỡng 1 GB thì dùng nhà cung cấp object storage nào, và có chấp nhận chi phí hàng tháng không.
+- ~~**STO-004**~~: đã giải quyết 2026-09-01 mà không phải đánh đổi - nghiêm ngặt là mặc định, nới lỏng phải yêu cầu tường minh (mục 3c).

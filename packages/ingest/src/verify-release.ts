@@ -4,6 +4,7 @@ import { extractVbplDraft, VbplExtractError } from "./extract-vbpl.js";
 
 export type VerificationCode =
   | "EVIDENCE_NOT_ARCHIVED"
+  | "ARCHIVE_NOT_PRESENT"
   | "SOURCE_NOT_DERIVABLE"
   | "TEXT_MISMATCH"
   | "PROVISION_NOT_IN_SOURCE"
@@ -21,9 +22,16 @@ export interface ReleaseVerificationReport {
   readonly derivedProvisions: number;
   readonly vouchedProvisions: number;
   readonly archivedSources: number;
+  /**
+   * Archives this release names that have no local copy. These are the records
+   * that could not be checked - which is not the same as records that failed.
+   * A caller that collapses the two turns "I have not looked" into "I looked
+   * and it was fine".
+   */
+  readonly uncheckedProvisions: number;
 }
 
-const archivePrefix = "sources/";
+const archivePrefix = "archive/";
 
 // Re-derives the legal text of a release from the bytes archived inside that
 // release and compares the hashes. Passing means: this text was produced by
@@ -46,8 +54,19 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
     }
   }
 
+  // An archive the manifest lists but the disk does not hold. Distinguished
+  // from an archive that was never recorded: one means "not fetched here", the
+  // other means "no evidence exists". Only the second is a defect in the
+  // release.
+  const missingByHash = new Map<string, string>();
+  for (const path of release.missingArchives) {
+    const digest = path.split(".")[0] ?? path;
+    missingByHash.set(digest, path);
+  }
+
   const provisionsByArchive = new Map<string, typeof release.dataset.provisionVersions>();
   const usedArchives = new Set<string>();
+  let uncheckedProvisions = 0;
 
   for (const provision of release.dataset.provisionVersions) {
     const primary = provision.evidence.find(
@@ -64,6 +83,16 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
     }
     const archivePath = archiveByHash.get(primary.sourceSha256);
     if (archivePath === undefined) {
+      const absent = missingByHash.get(primary.sourceSha256);
+      if (absent !== undefined) {
+        uncheckedProvisions += 1;
+        issues.push({
+          code: "ARCHIVE_NOT_PRESENT",
+          locator: provision.provisionVersionId,
+          message: `Archived source ${absent} is recorded in the manifest but has no local copy, so this record was not checked - fetch the archive and verify again`,
+        });
+        continue;
+      }
       issues.push({
         code: "EVIDENCE_NOT_ARCHIVED",
         locator: provision.provisionVersionId,
@@ -166,6 +195,7 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
 
   return {
     archivedSources: archives.size,
+    uncheckedProvisions,
     derivedProvisions,
     issues,
     vouchedProvisions,

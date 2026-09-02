@@ -75,8 +75,8 @@ try {
   check("file nháp không bị mang theo", !carried.some((file) => file.includes("staging")));
   check("con trỏ bản phát hành có mang theo", carried.includes("data/manual/published.json"));
   check(
-    "bytes nguồn có nằm trong release",
-    carried.some((file) => file.includes("/sources/")),
+    "bytes nguồn có được mang theo",
+    carried.some((file) => file.includes("/archive/")),
   );
   check(
     "sổ duyệt của người review có mang theo",

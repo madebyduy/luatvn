@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -131,19 +131,17 @@ describe("release verification chain", () => {
 
   it("refuses to load when an archived source is altered without repairing the manifest", async () => {
     await publishDrillRelease();
-    const archivePath = join(dataDirectory, "releases", releaseId, "sources");
+    const archiveDirectory = join(dataDirectory, "archive");
     const [archiveName] = await readFile(
       join(dataDirectory, "releases", releaseId, "manifest.json"),
       "utf8",
     ).then((text) =>
-      (JSON.parse(text) as { files: { path: string }[] }).files
-        .filter((file) => file.path.startsWith("sources/"))
-        .map((file) => file.path.replace("sources/", "")),
+      (JSON.parse(text) as { archives: { path: string }[] }).archives.map((entry) => entry.path),
     );
     if (archiveName === undefined) {
       throw new Error("drill release has no archived source");
     }
-    await writeFile(join(archivePath, archiveName), "đã bị sửa", "utf8");
+    await writeFile(join(archiveDirectory, archiveName), "đã bị sửa", "utf8");
 
     const outcome = await loadPublishedRelease(dataDirectory, loadOptions).then(
       () => null,
@@ -159,14 +157,28 @@ describe("release verification chain", () => {
     await publishDrillRelease();
     const manifest = JSON.parse(
       await readFile(join(dataDirectory, "releases", releaseId, "manifest.json"), "utf8"),
-    ) as { files: { path: string }[] };
-    const archive = manifest.files.find((file) => file.path.startsWith("sources/"));
+    ) as { archives: { path: string; sha256: string }[] };
+    const archive = manifest.archives[0];
     if (archive === undefined) {
       throw new Error("drill release has no archived source");
     }
+    // Swap the bytes AND the digest that names them, the way a tamperer with
+    // write access to both would: the file still matches its own hash, so only
+    // re-deriving the text catches it.
+    const swapped = Buffer.from(drillPayload("Nội dung đã bị thay."), "utf8");
+    const swappedDigest = sha256HexOfText(drillPayload("Nội dung đã bị thay."));
+    const extension = archive.path.slice(archive.path.indexOf("."));
+    await rm(join(dataDirectory, "archive", archive.path));
+    await writeFile(join(dataDirectory, "archive", `${swappedDigest}${extension}`), swapped);
+    const manifestPath = join(dataDirectory, "releases", releaseId, "manifest.json");
+    const full = JSON.parse(await readFile(manifestPath, "utf8")) as {
+      files: { path: string; sha256: string }[];
+      archives: { path: string; sha256: string }[];
+    };
+    full.archives = [{ path: `${swappedDigest}${extension}`, sha256: swappedDigest }];
     await rewriteReleaseFile(
-      archive.path,
-      Buffer.from(drillPayload("Nội dung đã bị thay."), "utf8"),
+      "manifest.json",
+      Buffer.from(`${JSON.stringify(full, null, 2)}\n`, "utf8"),
     );
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
@@ -217,18 +229,47 @@ describe("release verification chain", () => {
     expect(report.derivedProvisions).toBe(0);
   });
 
+  it("separates a record it could not check from a record that failed", async () => {
+    await publishDrillRelease();
+    const manifest = JSON.parse(
+      await readFile(join(dataDirectory, "releases", releaseId, "manifest.json"), "utf8"),
+    ) as { archives: { path: string }[] };
+    await Promise.all(
+      manifest.archives.map(async (archive) => rm(join(dataDirectory, "archive", archive.path))),
+    );
+
+    // With no local copy of the sources, nothing can be re-derived. That must
+    // read as "not checked", never as "checked and fine" - the whole promise of
+    // this release is that somebody can tell those apart.
+    const release = await loadPublishedRelease(dataDirectory, {
+      ...loadOptions,
+      archivePolicy: "optional",
+    });
+    const report = verifyReleaseChain(release);
+    expect(new Set(report.issues.map((issue) => issue.code))).toEqual(
+      new Set(["ARCHIVE_NOT_PRESENT"]),
+    );
+    expect(report.uncheckedProvisions).toBe(release.dataset.provisionVersions.length);
+    expect(report.derivedProvisions).toBe(0);
+    expect(report.issues[0]?.message).toContain("no local copy");
+  });
   it("reports an archived source that no record refers to", async () => {
     await publishDrillRelease();
     const strayText = drillPayload("Nguồn thừa không ai trỏ tới.");
-    const releaseDirectory = join(dataDirectory, "releases", releaseId);
-    const strayPath = `sources/${sha256HexOfText(strayText).slice(0, 12)}-stray.rsc.txt`;
-    await writeFile(join(releaseDirectory, strayPath), strayText, "utf8");
-    const manifestPath = join(releaseDirectory, "manifest.json");
+    const strayDigest = sha256HexOfText(strayText);
+    const strayPath = `${strayDigest}.rsc.txt`;
+    await mkdir(join(dataDirectory, "archive"), { recursive: true });
+    await writeFile(join(dataDirectory, "archive", strayPath), strayText, "utf8");
+    const manifestPath = join(dataDirectory, "releases", releaseId, "manifest.json");
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
       files: { path: string; sha256: string }[];
+      archives: { path: string; sha256: string }[];
     };
-    manifest.files.push({ path: strayPath, sha256: sha256HexOfText(strayText) });
-    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    manifest.archives.push({ path: strayPath, sha256: strayDigest });
+    await rewriteReleaseFile(
+      "manifest.json",
+      Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, "utf8"),
+    );
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
     const report = verifyReleaseChain(release);
