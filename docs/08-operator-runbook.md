@@ -94,7 +94,7 @@ Liệt kê record và trạng thái review. Người review đối chiếu từn
 pnpm dataset promote data/manual/staging-rel-xxx.json --version pv_vbpl_xxx --reviewed-by "Ho ten"
 ```
 
-`promote` là con đường duy nhất nâng record lên `verified` và ghi audit vào `<staging>.review-log.json`. Khi publish, file audit này **được đóng gói vào release** cùng bytes nguồn đã lưu, để người ngoài kiểm chứng được (mục 4b). Khi mọi record đã `verified` thì validate + publish như mục 2-3. Draft chưa promote không thể publish.
+`promote` là con đường duy nhất nâng record lên `verified` và ghi audit vào `<staging>.review-log.json`. Khi publish, file audit này **được đóng gói vào release**, còn bytes nguồn vào kho chung `data/manual/archive/` theo hash, để người ngoài kiểm chứng được (mục 4b). Khi mọi record đã `verified` thì validate + publish như mục 2-3. Draft chưa promote không thể publish.
 
 Cào tăng dần theo sitemap (khám phá + phát hiện thay đổi qua `lastmod`, không tải lại văn bản chưa đổi):
 
@@ -134,12 +134,12 @@ Sau đó vẫn đi đúng đường cũ: `pnpm dataset review` để xem, `pnpm 
 pnpm dataset verify
 ```
 
-Lệnh này **dựng lại nguyên văn từ chính bytes nguồn đã lưu trong release** rồi đối chiếu hash. Nó trả lời được câu hỏi "dựa vào đâu mà tin?" bằng một quy trình chạy được, không phải bằng lời hứa.
+Lệnh này **dựng lại nguyên văn từ chính bytes nguồn đã lưu** rồi đối chiếu hash. Nó trả lời được câu hỏi "dựa vào đâu mà tin?" bằng một quy trình chạy được, không phải bằng lời hứa.
 
 Bốn mắt xích được kiểm:
 
 1. **Toàn vẹn release** - mọi file trong `manifest.json` phải khớp SHA-256 đã ghi. Sửa file mà quên vá manifest thì release không load được.
-2. **Nguồn có mặt** - mỗi record phải có một file nguồn trong release hash đúng bằng `sourceSha256` của evidence. Khớp theo **hash chứ không theo tên file**, nên đổi tên hay tráo file đều không qua được.
+2. **Nguồn có mặt** - mỗi record phải có một file nguồn trong kho hash đúng bằng `sourceSha256` của evidence. Khớp theo **hash chứ không theo tên file** - thật ra tên file _chính là_ hash - nên đổi tên hay tráo file đều không qua được. Nếu kho chưa được tải về máy này, `verify` báo `ARCHIVE_NOT_PRESENT`: đó là **chưa kiểm được**, không phải đã kiểm và đạt.
 3. **Nguyên văn dựng lại được** - chạy lại bộ bóc tách trên bytes nguồn đó phải ra đúng `legalTextSha256`. Đây là mắt xích mạnh nhất: ai sửa nguyên văn rồi vá lại toàn bộ hash vẫn bị bắt, vì văn bản không còn dựng ra được từ nguồn.
 4. **Có người chịu trách nhiệm** - mỗi record `verified` phải có một mục trong `review-log.json` ghi ai duyệt, lúc nào.
 

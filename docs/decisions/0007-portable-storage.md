@@ -1,6 +1,6 @@
 # ADR-0007: Nơi lưu trữ và định dạng bản phát hành để chạy được trên mọi máy
 
-- Status: Proposed - chờ quyết định chủ dự án
+- Status: Một phần đã áp dụng (mục 3c, 2026-09-01); phần còn lại chờ quyết định chủ dự án (STO-001..003)
 - Date: 2026-09-01
 - Source: Yêu cầu chủ dự án 2026-09-01 ("máy nào cũng chạy được, một nơi lưu trữ tốt nhất"); số đo tại mục Context; nối tiếp ADR-0005
 
@@ -10,11 +10,11 @@ ADR-0005 đã chốt: file nguồn nằm trên đĩa máy vận hành, chỉ com
 
 Trước hết phải tách ba thứ đang bị gộp làm một khi nói "database":
 
-| Lớp                         | Là gì                                                              | Bất biến? | Ai cần nó                            |
-| --------------------------- | ------------------------------------------------------------------ | --------- | ------------------------------------ |
-| **Bản phát hành** (release) | `dataset.json` + `manifest.json` + `review-log.json` + bytes nguồn | Có        | Mọi máy chạy API, Web, MCP           |
-| **Kho nguồn thô** (archive) | Payload đã cào cho toàn corpus                                     | Có        | Chỉ máy làm ingest và kiểm chứng lại |
-| **Chỗ làm việc** (staging)  | Draft chưa duyệt, `crawl-state.json`                               | Không     | Chỉ máy đang nhập liệu               |
+| Lớp                         | Là gì                                                | Bất biến? | Ai cần nó                            |
+| --------------------------- | ---------------------------------------------------- | --------- | ------------------------------------ |
+| **Bản phát hành** (release) | `dataset.json` + `manifest.json` + `review-log.json` | Có        | Mọi máy chạy API, Web, MCP           |
+| **Kho nguồn thô** (archive) | Payload đã cào cho toàn corpus                       | Có        | Chỉ máy làm ingest và kiểm chứng lại |
+| **Chỗ làm việc** (staging)  | Draft chưa duyệt, `crawl-state.json`                 | Không     | Chỉ máy đang nhập liệu               |
 
 Chỉ lớp thứ nhất bắt buộc phải đi theo người dùng. Gộp ba lớp là lý do người ta tưởng phải bê 10-30 GB đi khắp nơi.
 
@@ -54,7 +54,7 @@ Kích thước chưa phải vấn đề hôm nay. Cái làm hỏng "clone là ch
 
 Cả hai đã sửa và có bài diễn tập chạy được: `node tools/portability-drill.mjs` dựng release qua đường thật, commit dưới đúng `.gitignore`/`.gitattributes` của repo, clone như một máy thứ hai, rồi nạp và dựng lại nguyên văn từ chính bản sao chép.
 
-## Decision (đề xuất, chờ chủ dự án duyệt)
+## Decision
 
 **1. Bất biến nền tảng: sự thật không nằm ở nơi lưu, mà nằm ở hash.**
 
@@ -62,7 +62,7 @@ Một bản phát hành hợp lệ là "khối bytes có SHA-256 khớp manifest
 
 **2. Ba lớp, ba nơi lưu khác nhau.**
 
-- **Bản phát hành** đi theo git, trong private remote. Kèm bytes nguồn của đúng những văn bản trong release. Máy mới: `git clone` → `pnpm install` → `pnpm dataset verify` → `pnpm start`. Không cần credential, không cần mạng ngoài git.
+- **Bản phát hành** đi theo git, trong private remote, cùng kho bằng chứng dùng chung tại `data/manual/archive/` (mục 3c). Máy mới: `git clone` → `pnpm install` → `pnpm dataset verify` → `pnpm start`. Không cần credential, không cần mạng ngoài git.
 - **Kho nguồn thô** ở lại đĩa máy ingest theo ADR-0005, cộng thêm một bản sao lưu do chủ dự án chọn. Không đi vào git.
 - **Chỗ làm việc** không rời máy, đã được `.gitignore` chặn.
 
@@ -142,7 +142,7 @@ Khi tổng bản phát hành vượt khoảng **1 GB**, hoặc khi cần phát c
 ## Consequences
 
 - Hôm nay đã chạy được trên mọi máy mà không tốn đồng nào và không thêm credential nào, vì release còn nhỏ. Chi phí chỉ phát sinh khi corpus lớn thật.
-- Đổi lại, phải kỷ luật: bytes nguồn đi kèm release làm git phình theo từng lần publish, và git không bao giờ xoá lịch sử. Đây là lý do có ngưỡng 1 GB ở trên chứ không để trôi.
+- Kho bằng chứng vẫn làm git phình theo số **văn bản mới**, dù không còn phình theo số lần publish (mục 3c đã khử nhân bản). Git không bao giờ xoá lịch sử, nên ngưỡng 1 GB ở trên vẫn phải theo dõi.
 - SQLite tốn đĩa hơn JSON 55% ở cùng dữ liệu. Chấp nhận, vì đổi lại truy vấn 1 ms thay vì nạp 435 MB vào RAM.
 - `.gitattributes` là một phần của hợp đồng tính di động chứ không phải tiểu tiết định dạng: thiếu nó thì release không đi qua git được giữa Windows và Linux.
 
