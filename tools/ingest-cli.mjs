@@ -13,6 +13,7 @@ import { extractPdfLines, PdfTextError } from "@luatvn/pdf-text";
 import {
   checkExtraction,
   crossCheckCongBao,
+  discoverLinkEntries,
   CongBaoExtractError,
   CongBaoPageError,
   extractCongBaoDraft,
@@ -46,6 +47,8 @@ const usage = `Usage:
   pnpm ingest drift <detail-url> [--data-dir <dir>] [--content-action <id>]
   pnpm ingest congbao <detail-url> --release <rel_id> --out <staging.json>
                     [--sources-dir <dir>] [--allow-hosts h1,h2] [--no-machine-check]
+  pnpm ingest congbao-batch --seeds <url1,url2> --release <rel_id> --out <staging.json>
+                    [--max n] [--state <state.json>] [--sources-dir <dir>]
 
 fetch: store one document plus .evidence.json (URL, SHA-256, retrievedAt).
 draft: fetch a vbpl.vn detail payload and extract an under_review staging draft
@@ -60,6 +63,11 @@ congbao: read a congbao.chinhphu.vn detail page, fetch the signed PDF it points
        at, and extract an under_review draft from the PDF text layer. The page
        itself carries no legal text. A document whose effective date the gazette
        leaves blank is refused, not guessed.
+congbao-batch: crawl a little, store a little. Discovers detail pages from the
+       seed listings, ingests up to --max documents not handled before, merges
+       them into one staging file, runs the six cross-checks on each and raises
+       what passes to machine_checked. Refusals are recorded with their reason
+       so they are not retried forever. Re-run to continue where it stopped.
 crawl: fetch seed pages, follow same-host links matching the pattern within the
        budget; unchanged documents (same SHA-256) produce no new evidence.
 --allow-hosts replaces the registered host list (SR-003) for drills/tests only.`;
@@ -300,6 +308,218 @@ async function appendReviewLog(stagingPath, entries) {
     existing = [];
   }
   await writeFile(logPath, `${JSON.stringify([...existing, ...entries], null, 2)}\n`, "utf8");
+}
+
+// One gazette document, from detail page to a cross-checked draft. Shared by
+// the single-document command and the incremental batch, so both take exactly
+// the same path and neither can drift into a softer set of checks.
+async function ingestOneCongBaoDocument(fetcher, detailUrl, datasetReleaseId, sourcesDirectory) {
+  const page = await fetcher.fetchDocument(detailUrl);
+  const reference = readCongBaoDetailPage(Buffer.from(page.bytes).toString("utf8"));
+  // The signed PDF is the legal artifact; the page is a record card for it.
+  const pdf = await fetcher.fetchDocument(reference.pdfUrl);
+  const storedName = await storeDocument(pdf, sourcesDirectory, reference.pdfUrl);
+  const pdfText = await extractPdfLines(new Uint8Array(pdf.bytes));
+  const { draft, report } = extractCongBaoDraft(pdfText, {
+    datasetReleaseId,
+    evidence: {
+      locator: reference.locator,
+      officialSourceUrl: pdf.officialSourceUrl,
+      retrievedAt: pdf.retrievedAt,
+      sourceSha256: pdf.sourceSha256,
+    },
+    reference,
+  });
+  const checks = crossCheckCongBao({
+    draft,
+    pdfText,
+    reference,
+    report,
+    secondExtraction: secondExtractionOf(join(sourcesDirectory, storedName)),
+  });
+  return { checks, draft, pdf, reference, report, storedName };
+}
+
+// Raises every record that cleared all six checks to machine_checked, leaving
+// the rest under_review. Returns the updated dataset text and the audit
+// entries, so the caller decides where they are written.
+function applyMachineChecks(datasetText, draft, checks) {
+  let stagingText = datasetText;
+  const audits = [];
+  for (const version of draft.provisionVersions) {
+    const provisionFlagged = checks.flaggedProvisionVersionIds.includes(version.provisionVersionId);
+    try {
+      const marked = markRecordMachineChecked({
+        checks: {
+          allPassed: checks.allPassed && !provisionFlagged,
+          flagged: provisionFlagged ? [...checks.flagged, "NUMBERING"] : checks.flagged,
+          notAvailable: checks.notAvailable,
+        },
+        datasetText: stagingText,
+        provisionVersionId: version.provisionVersionId,
+      });
+      stagingText = marked.updatedDatasetText;
+      audits.push(marked.audit);
+    } catch (error) {
+      if (!(error instanceof ReviewError) || error.code !== "CHECKS_NOT_PASSED") {
+        throw error;
+      }
+    }
+  }
+  return { audits, stagingText };
+}
+
+// Failures that say something about the network or the moment, not about the
+// document. These are retried on the next run rather than recorded as a
+// decision.
+const transientCodes = new Set([
+  "FETCH_FAILED",
+  "REQUEST_TIMEOUT",
+  "RESPONSE_TOO_LARGE",
+  "ROBOTS_FETCH_FAILED",
+  "UNKNOWN",
+]);
+
+async function readJsonIfPresent(path, fallback) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+// Crawl a little, store a little, resume where it stopped. State records every
+// detail URL already handled and, for a refusal, why - so a document the
+// gazette leaves without an effective date is not re-fetched every run, and is
+// still listed for a person to deal with.
+async function runCongBaoBatch(flags) {
+  const datasetReleaseId = flags.get("release");
+  const stagingPath = flags.get("out");
+  const seeds = flags.get("seeds");
+  if (datasetReleaseId === undefined || stagingPath === undefined || seeds === undefined) {
+    throw new Error(usage);
+  }
+  const max = Number(flags.get("max") ?? "10");
+  const statePath = flags.get("state") ?? `${stagingPath}.batch-state.json`;
+  const sourcesDirectory =
+    flags.get("sources-dir") ?? join("data", "manual", "sources", "incoming");
+  const fetcher = new DocumentFetcher(fetcherOptionsFrom(flags));
+
+  const state = await readJsonIfPresent(statePath, { documents: {} });
+  const seedUrls = seeds.split(",").map((seed) => seed.trim());
+  const discovered = [];
+  for (const seed of seedUrls) {
+    // eslint-disable-next-line no-await-in-loop -- sequential fetching keeps the per-host rate limit honest
+    const seedPage = await fetcher.fetchDocument(seed);
+    const html = Buffer.from(seedPage.bytes).toString("utf8");
+    for (const entry of discoverLinkEntries(html, seed, /\/van-ban\//u)) {
+      if (!discovered.includes(entry.url)) {
+        discovered.push(entry.url);
+      }
+    }
+  }
+  out(`phát hiện ${String(discovered.length)} trang chi tiết từ ${String(seedUrls.length)} seed`);
+
+  const pending = discovered.filter((url) => state.documents[url] === undefined).slice(0, max);
+  out(
+    `${String(discovered.length - pending.length)} đã xử lý trước đó; lần này làm ${String(pending.length)}`,
+  );
+
+  const reviewPath = `${stagingPath}.needs-review.json`;
+  const existingClean = await readJsonIfPresent(stagingPath, null);
+  const existingReview = await readJsonIfPresent(reviewPath, null);
+  const clean = existingClean === null ? [] : [...existingClean.provisionVersions];
+  const needsReview = existingReview === null ? [] : [...existingReview.provisionVersions];
+  let flaggedDocuments = 0;
+  const audits = [];
+  let ingested = 0;
+  let refused = 0;
+  let transient = 0;
+  let machineChecked = 0;
+
+  for (const url of pending) {
+    let outcome;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- one document at a time so the rate limit and the state file stay honest
+      outcome = await ingestOneCongBaoDocument(fetcher, url, datasetReleaseId, sourcesDirectory);
+    } catch (error) {
+      const code = error?.code ?? "UNKNOWN";
+      // A network hiccup is not a decision about the document. Recording it as
+      // a refusal would retire the URL forever on a bad minute - which is
+      // exactly what happened to Nghị định 327 the first time this ran, a
+      // document that ingests cleanly on retry.
+      if (transientCodes.has(code)) {
+        transient += 1;
+        out(`  TẠM LỖI ${code}  ${url} (sẽ thử lại lần sau)`);
+        continue;
+      }
+      state.documents[url] = { at: new Date().toISOString(), reason: code, status: "refused" };
+      refused += 1;
+      out(`  TỪ CHỐI ${code}  ${url}`);
+      continue;
+    }
+    const { checks, draft, reference } = outcome;
+    // Each document is machine-checked on its own, then routed whole. A
+    // document with one flagged article does not hold up the rest of the
+    // batch: it goes to the needs-review file and a person deals with it
+    // there, while the clean ones stay publishable. Routing whole documents
+    // rather than loose articles matches how a reviewer actually reads.
+    const applied = applyMachineChecks(`${JSON.stringify(draft, null, 2)}\n`, draft, checks);
+    const marked = JSON.parse(applied.stagingText);
+    const allClean = marked.provisionVersions.every(
+      (version) => version.reviewStatus === "machine_checked",
+    );
+    if (allClean) {
+      clean.push(...marked.provisionVersions);
+      audits.push(...applied.audits);
+      machineChecked += applied.audits.length;
+      ingested += 1;
+    } else {
+      needsReview.push(...marked.provisionVersions);
+      flaggedDocuments += 1;
+    }
+    state.documents[url] = {
+      articles: draft.provisionVersions.length,
+      at: new Date().toISOString(),
+      documentNumber: reference.documentNumber,
+      machineChecked: applied.audits.length,
+      status: allClean ? "ingested" : "needs_review",
+    };
+    out(
+      `  ${allClean ? "ĐÃ LẤY " : "CẦN XEM"} ${reference.documentNumber.padEnd(22)} ${String(draft.provisionVersions.length)} Điều, ${String(applied.audits.length)} lên machine_checked${checks.allPassed ? "" : ` (cờ: ${[...checks.flagged, ...checks.notAvailable].join(", ")})`}`,
+    );
+  }
+
+  const fileFor = (versions) => ({
+    amendments: [],
+    applicability: [],
+    datasetReleaseId,
+    provisionVersions: versions,
+    schemaVersion: 1,
+  });
+  if (clean.length > 0) {
+    await writeFile(stagingPath, `${JSON.stringify(fileFor(clean), null, 2)}\n`, "utf8");
+  }
+  if (needsReview.length > 0) {
+    await writeFile(reviewPath, `${JSON.stringify(fileFor(needsReview), null, 2)}\n`, "utf8");
+  }
+  if (audits.length > 0) {
+    await appendReviewLog(stagingPath, audits);
+  }
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+  out("");
+  out(
+    `lần này: ${String(ingested)} văn bản sạch, ${String(flaggedDocuments)} cần người xem, ${String(refused)} từ chối, ${String(transient)} tạm lỗi`,
+  );
+  out(`  publish được ngay : ${stagingPath} - ${String(clean.length)} Điều`);
+  if (needsReview.length > 0) {
+    out(`  chờ người xem     : ${reviewPath} - ${String(needsReview.length)} Điều`);
+  }
+  out(
+    `  state             : ${statePath} - ${String(Object.keys(state.documents).length)} URL đã biết`,
+  );
+  out("Chạy lại lệnh này để lấy tiếp; đã lấy rồi thì không tải lại, tạm lỗi thì thử lại.");
 }
 
 async function runCongBao(detailUrl, flags) {
@@ -555,6 +775,10 @@ async function run() {
     case "congbao": {
       if (positional[0] === undefined) throw new Error(usage);
       await runCongBao(positional[0], flags);
+      return;
+    }
+    case "congbao-batch": {
+      await runCongBaoBatch(flags);
       return;
     }
     default: {

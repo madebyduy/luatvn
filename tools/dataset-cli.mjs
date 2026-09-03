@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import process from "node:process";
 
@@ -29,6 +29,7 @@ const usage = `Usage:
   pnpm dataset publish  <staging-file.json> --reviewed-by "<full name>" [--data-dir <dir>] [--sources-dir <dir>]
   pnpm dataset verify   [--data-dir <dir>] [--allow-hosts h1,h2]
   pnpm dataset sources  [--verify] [--dir <sources-dir>] [--manifest <manifest.json>]
+  pnpm dataset backup   --to <dir> [--data-dir <dir>] [--verify-only]
   pnpm dataset rollback [--data-dir <dir>]
   pnpm dataset status   [--data-dir <dir>]
 
@@ -43,6 +44,12 @@ verify re-derives the legal text of the published release from the sources
 archived inside it and compares the hashes. It proves the text came from that
 archived source and that a named reviewer vouched for each record; it does not
 prove the source itself states the law correctly.
+backup copies the shared evidence archive to another disk and checks every
+copied file against its own digest. The archive is the one part of the data
+that git does not carry (ADR-0005/0007), so losing the disk loses it; owner
+decision 2026-09-03 (ADR-0008 STO-001) is that a backup is required, with the
+location and schedule chosen by whoever runs it. --verify-only compares an
+existing backup without writing.
 sources rebuilds data/manual/sources-manifest.json from the local source store
 (ADR-0005: the files themselves never enter git); --verify checks the store
 against the committed manifest and exits 1 on any difference.`;
@@ -63,7 +70,7 @@ function printStoreError(error) {
   }
 }
 
-const booleanFlags = new Set(["verify"]);
+const booleanFlags = new Set(["verify", "verify-only"]);
 
 function parseArguments(argv) {
   const positional = [];
@@ -435,6 +442,84 @@ async function runVerify(dataDirectory, flags) {
   out("note: this proves derivation and review, not that the source states the law correctly");
 }
 
+async function runBackup(dataDirectory, flags) {
+  const target = flags.get("to");
+  if (target === undefined) {
+    throw new Error(usage);
+  }
+  const verifyOnly = flags.get("verify-only") === "true";
+  const archiveDirectory = join(dataDirectory, "archive");
+  let names;
+  try {
+    names = (await readdir(archiveDirectory)).filter((name) => !name.startsWith("."));
+  } catch {
+    fail(`ARCHIVE_MISSING: không có thư mục ${archiveDirectory} để sao lưu`);
+    return;
+  }
+  if (!verifyOnly) {
+    await mkdir(target, { recursive: true });
+  }
+
+  let copied = 0;
+  let alreadyThere = 0;
+  let mismatched = 0;
+  let missing = 0;
+  let bytes = 0;
+  for (const name of names) {
+    const digest = name.split(".")[0] ?? "";
+    // eslint-disable-next-line no-await-in-loop -- one file at a time keeps memory flat on a large archive
+    const source = await readFile(join(archiveDirectory, name));
+    bytes += source.length;
+    // The file is named by its own hash, so a corrupt original is caught here
+    // rather than copied faithfully into the backup.
+    if (createHash("sha256").update(source).digest("hex") !== digest) {
+      fail(`  HỎNG NGUỒN  ${name}: nội dung không khớp mã băm trong tên file`);
+      mismatched += 1;
+      continue;
+    }
+    const destination = join(target, name);
+    let existing = null;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- see above
+      existing = await readFile(destination);
+    } catch {
+      existing = null;
+    }
+    if (existing !== null) {
+      if (createHash("sha256").update(existing).digest("hex") === digest) {
+        alreadyThere += 1;
+        continue;
+      }
+      fail(`  HỎNG BẢN SAO ${name}: bản sao lưu khác nội dung nguồn`);
+      mismatched += 1;
+      continue;
+    }
+    if (verifyOnly) {
+      fail(`  THIẾU        ${name}: bản sao lưu chưa có file này`);
+      missing += 1;
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop -- see above
+    await writeFile(destination, source);
+    copied += 1;
+  }
+
+  out(`kho nguồn: ${String(names.length)} file, ${(bytes / 1e6).toFixed(1)} MB`);
+  out(`  đã có sẵn ở bản sao lưu : ${String(alreadyThere)}`);
+  out(
+    verifyOnly
+      ? `  thiếu ở bản sao lưu    : ${String(missing)}`
+      : `  chép mới               : ${String(copied)}`,
+  );
+  out(`  lệch mã băm            : ${String(mismatched)}`);
+  out(`  đích: ${target}`);
+  if (mismatched > 0 || missing > 0) {
+    fail("sao lưu CHƯA đầy đủ hoặc có file lệch; xử lý từng dòng ở trên rồi chạy lại");
+    return;
+  }
+  out("bản sao lưu khớp từng byte với kho nguồn.");
+}
+
 async function runRollback(dataDirectory) {
   const rolledBack = await rollbackPublishedRelease(dataDirectory);
   out(`rolled back: current release is now ${rolledBack.restoredReleaseId}`);
@@ -489,6 +574,10 @@ async function run() {
     }
     case "sources": {
       await runSources(flags, flags.get("verify") === "true");
+      return;
+    }
+    case "backup": {
+      await runBackup(dataDirectory, flags);
       return;
     }
     case "rollback": {

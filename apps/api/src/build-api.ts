@@ -38,6 +38,13 @@ export interface BuildApiOptions {
    * names the snapshot it is answering from.
    */
   readonly datasetReleaseId?: string;
+  /**
+   * Reads one archived source by its SHA-256, or null when this server holds no
+   * copy. A function rather than a map because the archive is the heavy half of
+   * the data - fifty times the size of what answering a query needs - and must
+   * not be held in memory to be servable (VER-005, ADR-0007 3c).
+   */
+  readonly readArchivedSource?: (digest: string) => Promise<Uint8Array | null>;
 }
 
 const defaultOperationTimeoutMs = 10_000;
@@ -139,6 +146,50 @@ export function buildApi(options: BuildApiOptions) {
       },
     },
     async () => ({ status: "ok" as const }),
+  );
+
+  // VER-005 (owner decision 2026-09-03: yes). The archived source is served by
+  // its own digest, so a reader can fetch the exact bytes the text was derived
+  // from and re-run the derivation themselves. This is what turns "trust me"
+  // into "check it yourself"; without it the evidence chain is only checkable
+  // by whoever holds the disk.
+  app.get(
+    "/v1/sources/:digest",
+    {
+      schema: {
+        params: z
+          .object({ digest: z.string().regex(/^[0-9a-f]{64}$/u, "digest must be a SHA-256") })
+          .strict(),
+        // The 200 is raw bytes, not JSON, so it is declared as such: the type
+        // provider would otherwise try to serialise a Buffer through a schema.
+        response: {
+          200: z.instanceof(Buffer),
+          404: ErrorResponseSchema,
+          500: ErrorResponseSchema,
+        },
+      },
+    },
+    async (request, reply) => {
+      const bytes = await options.readArchivedSource?.(request.params.digest);
+      if (bytes === undefined || bytes === null) {
+        return reply.status(404).send({
+          error: {
+            code: "SOURCE_NOT_AVAILABLE",
+            message: "Máy chủ này không giữ bản sao nguồn có mã băm đó",
+            requestId: request.id,
+          },
+        });
+      }
+      // Served as a download and never rendered: these are untrusted bytes from
+      // an external site and must not execute in the reader's browser. The
+      // digest is the URL, so the response can be cached forever.
+      return reply
+        .header("content-type", "application/octet-stream")
+        .header("content-disposition", `attachment; filename="${request.params.digest}"`)
+        .header("x-content-type-options", "nosniff")
+        .header("cache-control", "public, max-age=31536000, immutable")
+        .send(Buffer.from(bytes));
+    },
   );
 
   const citationSegment = /^dieu-(?<article>\d{1,5})@(?<validAt>\d{4}-\d{2}-\d{2})$/u;

@@ -6,6 +6,7 @@
 export type CongBaoPageErrorCode =
   | "PDF_LINK_NOT_FOUND"
   | "DOCUMENT_NUMBER_NOT_FOUND"
+  | "UNSUPPORTED_DOCUMENT_TYPE"
   | "ISSUE_DATE_NOT_FOUND"
   | "EFFECTIVE_DATE_NOT_STATED";
 
@@ -83,6 +84,18 @@ export function readCongBaoDetailPage(html: string): CongBaoDocumentReference {
       text,
     );
   if (numbered?.groups === undefined) {
+    // The gazette publishes normative documents alongside directives that carry
+    // no Điều structure at all - Công điện, Công văn, Thông báo. Naming the
+    // type that was found separates "this is out of scope" from "the page did
+    // not parse", which are different problems with different fixes.
+    const anyType = /(?<kind>[A-ZĐ][\p{Ll}\s]{2,30})\s+số\s+[0-9A-Za-zĐÐ/.-]+/u.exec(text);
+    const kind = anyType?.groups?.["kind"]?.trim();
+    if (kind !== undefined && kind !== "") {
+      throw new CongBaoPageError(
+        "UNSUPPORTED_DOCUMENT_TYPE",
+        `"${kind}" không phải loại văn bản có cấu trúc Điều mà bộ bóc này xử lý được; bỏ qua, không phải lỗi trang`,
+      );
+    }
     throw new CongBaoPageError(
       "DOCUMENT_NUMBER_NOT_FOUND",
       "không đọc được loại và số hiệu văn bản trên trang chi tiết",

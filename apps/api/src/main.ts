@@ -1,8 +1,13 @@
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 import { LegalQueryService } from "@luatvn/application";
 import {
   loadPublishedRelease,
   ManualDatasetRepository,
   ReleaseStoreError,
+  sha256HexOfBytes,
+  sourceArchiveDirectory,
 } from "@luatvn/manual-dataset";
 import { z } from "zod";
 
@@ -28,8 +33,27 @@ async function main(): Promise<void> {
   );
   const repository = new ManualDatasetRepository(release);
   const legalQueryService = new LegalQueryService(repository);
+  const archiveDirectory = join(config.dataDirectory, sourceArchiveDirectory);
+  const readArchivedSource = async (digest: string): Promise<Uint8Array | null> => {
+    let names: string[];
+    try {
+      names = await readdir(archiveDirectory);
+    } catch {
+      return null;
+    }
+    const name = names.find((entry) => entry.split(".")[0] === digest);
+    if (name === undefined) {
+      return null;
+    }
+    const bytes = await readFile(join(archiveDirectory, name));
+    // Never hand out bytes that do not hash to the name they are filed under:
+    // the digest in the URL is the reader's whole guarantee.
+    return sha256HexOfBytes(bytes) === digest ? bytes : null;
+  };
+
   const app = buildApi({
     datasetReleaseId: release.datasetReleaseId,
+    readArchivedSource,
     legalQueryService,
     operationTimeoutMs: config.operationTimeoutMs,
   });

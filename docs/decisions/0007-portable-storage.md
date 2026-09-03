@@ -148,7 +148,7 @@ Khi tổng bản phát hành vượt khoảng **1 GB**, hoặc khi cần phát c
 
 ## Chờ chủ dự án quyết
 
-- **STO-001**: nơi sao lưu kho nguồn thô (ADR-0005 để trống). Cần một địa điểm cụ thể và một lịch cụ thể.
-- **STO-002**: có mở private remote thứ hai làm bản sao lưu cho repo hay không. Hiện repo riêng chỉ tồn tại trên một máy.
-- **STO-003**: khi vượt ngưỡng 1 GB thì dùng nhà cung cấp object storage nào, và có chấp nhận chi phí hàng tháng không.
+- ~~**STO-001**~~: **quyết 2026-09-03 (ADR-0008): CẦN sao lưu.** Lệnh `pnpm dataset backup` dựng bản sao kiểm chứng được; địa điểm và lịch do người vận hành chọn khi chạy.
+- ~~**STO-002**~~: **quyết 2026-09-03 (ADR-0008): KHÔNG.** `luatvn-private` là bản duy nhất ngoài máy; rủi ro được chấp nhận có ý thức.
+- ~~**STO-003**~~: **quyết 2026-09-03 (ADR-0008): KHÔNG dùng object storage.** Kho ở lại đĩa. Ngưỡng 1 GB (~1.200 văn bản) vẫn phải theo dõi và mở lại quyết định khi tới.
 - ~~**STO-004**~~: đã giải quyết 2026-09-01 mà không phải đánh đổi - nghiêm ngặt là mặc định, nới lỏng phải yêu cầu tường minh (mục 3c).

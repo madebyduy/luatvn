@@ -226,6 +226,49 @@ Kiểm lại bất cứ lúc nào bằng bài diễn tập chạy thật (dựng
 pnpm drill:portability
 ```
 
+## 1e. Cào dần, lưu dần (P-017 CB-011)
+
+```bash
+pnpm ingest congbao-batch --seeds "https://congbao.chinhphu.vn/van-ban-dang-cong-bao.htm" --release rel_00X --out data/manual/staging-rel-00X.json --max 10
+```
+
+Mỗi lần chạy lấy tối đa `--max` văn bản **chưa xử lý**, rồi ghi lại đã làm tới đâu. Chạy lại là đi tiếp, không tải lại cái đã có.
+
+Kết quả chia ba đường, và đây là chỗ quan trọng nhất:
+
+| Đường       | File                                     | Nghĩa                                                                        |
+| ----------- | ---------------------------------------- | ---------------------------------------------------------------------------- |
+| **Sạch**    | `staging-rel-00X.json`                   | Mọi Điều qua đủ sáu phép đối soát → `machine_checked`. **Publish được ngay** |
+| **Cần xem** | `staging-rel-00X.json.needs-review.json` | Có Điều bị cờ. Cả văn bản chuyển sang đây để **không chặn** phần sạch        |
+| **Từ chối** | ghi trong `.batch-state.json`            | Không tạo draft. Xem lý do bên dưới                                          |
+
+Lý do từ chối thường gặp, và ý nghĩa thật:
+
+- `EFFECTIVE_DATE_NOT_STATED` - văn bản hợp nhất, Công báo cố ý bỏ trống ngày hiệu lực. **Đúng, không phải lỗi.**
+- `UNSUPPORTED_DOCUMENT_TYPE` - Công điện, Công văn… không có cấu trúc Điều. **Bỏ qua, không phải lỗi trang.**
+- `ARTICLE_NUMBERS_BROKEN` - số Điều không liên tục. Hay gặp ở văn bản có **phụ lục đánh số Điều lại từ 1**. Chưa hỗ trợ; cần nhập tay.
+- `FETCH_FAILED` và các lỗi mạng - **không** bị ghi là từ chối, lần chạy sau tự thử lại.
+
+Xong một đợt thì `validate` → `publish` file sạch như mục 2-3, và xử lý file `needs-review` bằng `pnpm dataset queue`.
+
+## 1f. Sao lưu kho bằng chứng (ADR-0008 STO-001)
+
+```bash
+pnpm dataset backup --to <ổ-cứng-ngoài>/luatvn-archive
+```
+
+Kho `data/manual/archive/` là **phần duy nhất git không mang theo**. Bản phát hành thì an toàn vì nằm trong git, nhưng mất đĩa là mất kho, và mất kho thì không ai dựng lại được nguyên văn từ nguồn nữa.
+
+Lệnh chép từng file và **băm lại từng file** ở cả hai đầu: tên file chính là mã băm, nên nguồn hỏng hay bản sao lệch đều bị bắt chứ không chép nhầm im lặng. Đã có thì bỏ qua, nên chạy lại rất nhanh.
+
+Kiểm bản sao lưu cũ mà không ghi gì:
+
+```bash
+pnpm dataset backup --to <đích> --verify-only
+```
+
+Thiếu file hoặc lệch băm thì exit 1.
+
 ## 4b2. Tham chiếu chéo trong nguyên văn (UX-110)
 
 Trên màn hình tra cứu, các cụm như `Điều 7 của Nghị định này`, `khoản 1 Điều 5 Luật …`, `Nghị định số 100/2019/NĐ-CP` được nhận ra tự động. Cụm nào **giải được** thành link mở đúng điều khoản **tại cùng ngày pháp lý đang đọc**. Cụm nào **chưa giải được** giữ nguyên chữ, gạch chấm, rê chuột thấy lý do: chưa có trong kho / không có bản hiệu lực tại ngày này / nhiều điều cùng khớp / chưa hỗ trợ. Hệ thống **không đoán đích**.
@@ -237,6 +280,16 @@ Giới hạn hiện tại: Luật gọi theo **tên** ("Luật An ninh mạng") 
 Tab đầu trên web là một ô nhập: kể tình huống ("công ty nợ lương tôi 2 tháng"), chọn ngày (mặc định hôm nay), nhận danh sách Điều đang hiệu lực khớp nhất, mỗi Điều kèm nhãn tin cậy và link mở nguyên văn tại ngày đó. API: `POST /v1/search`; MCP: `tim_dieu_khoan_theo_tinh_huong`.
 
 Đây là **tìm theo từ** (BM25 trên token đã gập dấu), không phải hiểu nghĩa. Nó tìm được "lương" chứ không suy ra "chậm trả" từ "nợ". Chỉ trả phiên bản `verified`/`machine_checked` đang hiệu lực tại ngày hỏi. Không có gì đủ liên quan thì trả **rỗng và nói rõ** ("kho chưa có" khác "không có gì khớp"), không trả kết quả kém nhất. Không câu nào trong kết quả do máy viết.
+
+## 4b3b. Tải bytes nguồn để tự kiểm (VER-005)
+
+```
+GET /v1/sources/<sha256>
+```
+
+Trả về đúng file nguồn đã lưu trữ, tải xuống chứ không hiển thị. Máy chủ **băm lại trước khi trả**: không bao giờ đưa ra bytes không khớp mã băm trong địa chỉ. Không giữ bản sao thì trả 404 `SOURCE_NOT_AVAILABLE`, không đoán.
+
+Đây là quyết định 2026-09-03 (ADR-0008 VER-005). Nó là thứ biến "tin tôi đi" thành "tự kiểm đi": người ngoài tải bytes gốc, chạy lại bộ bóc của họ, so hash với `legalTextSha256` trong bản phát hành.
 
 ## 4b3. Địa chỉ trích dẫn vĩnh viễn và kiểm chứng trích dẫn (UX-120)
 
