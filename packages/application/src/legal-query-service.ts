@@ -98,6 +98,47 @@ export type GetProvisionAtOutput = LegalEnvelope<
     }
 >;
 
+// A citation addressed the way people write one - document number, article,
+// date - rather than by an internal identifier. Resolves to the same answer
+// shape as getProvisionAt, plus how the address was matched.
+export type LookupByCitationOutput =
+  GetProvisionAtOutput extends LegalEnvelope<infer Data>
+    ? LegalEnvelope<
+        | (Data & { readonly status: "resolved" | "unknown" | "conflict" })
+        | {
+            readonly status: "unknown";
+            readonly reason:
+              "DOCUMENT_NOT_IN_CORPUS" | "ARTICLE_NOT_IN_DOCUMENT" | "ARTICLE_AMBIGUOUS";
+            readonly candidateVersionIds: readonly ProvisionVersionId[];
+          }
+      >
+    : never;
+
+export type CitationTextMatch = "exact" | "close" | "different";
+
+// The answer to "does this quotation say what the law said on that date?".
+// Three questions, answered separately, never collapsed: does the article
+// exist in the corpus, was a version in force on the date, and does the
+// quoted text match that version.
+export type CheckCitationOutput = LegalEnvelope<{
+  readonly status: "resolved";
+  readonly documentNumber: string;
+  readonly article: number;
+  readonly validAt: LegalDate;
+  readonly exists: boolean;
+  readonly inForceAtDate: boolean;
+  readonly target: {
+    readonly provisionId: ProvisionId;
+    readonly provisionVersionId: ProvisionVersionId;
+  } | null;
+  readonly textMatch: {
+    readonly status: CitationTextMatch | "not_checked";
+    /** Dice coefficient over normalised words, 0..1; null when nothing to compare. */
+    readonly similarity: number | null;
+  };
+  readonly citation: LegalCitation | null;
+}>;
+
 export type CompareProvisionVersionsOutput = LegalEnvelope<{
   readonly status: "resolved";
   readonly provisionId: ProvisionId;
@@ -267,6 +308,44 @@ function compactDocumentNumber(value: string): string {
   return value.normalize("NFC").replaceAll(/\s+/gu, "").toUpperCase();
 }
 
+// Letters and digits only, diacritics stripped, Đ folded to D. Loose enough
+// that a URL slug and the printed number agree; strict enough that two real
+// document numbers never collide (they differ in digits and type letters).
+function citationKey(value: string): string {
+  return value
+    .normalize("NFD")
+    .replaceAll(/\p{M}/gu, "")
+    .replaceAll(/[Đđ]/gu, "D")
+    .replaceAll(/[^\p{L}\p{N}]/gu, "")
+    .toUpperCase();
+}
+
+// Dice coefficient over word multisets, after NFC and whitespace folding. A
+// quotation copied faithfully scores ~1; one with a word changed drops below
+// the "close" band; a different article scores near 0.
+function wordBag(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const word of text
+    .normalize("NFC")
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) ?? []) {
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function wordDice(left: string, right: string): number {
+  const a = wordBag(left);
+  const b = wordBag(right);
+  let shared = 0;
+  for (const [word, count] of a) {
+    shared += Math.min(count, b.get(word) ?? 0);
+  }
+  const total =
+    [...a.values()].reduce((sum, n) => sum + n, 0) + [...b.values()].reduce((sum, n) => sum + n, 0);
+  return total === 0 ? 1 : (2 * shared) / total;
+}
+
 function headingArticleNumber(heading: string | null): number | null {
   const match = heading === null ? null : /^Điều\s+(\d+)\b/u.exec(heading.normalize("NFC"));
   return match === null ? null : Number(match[1]);
@@ -401,6 +480,157 @@ function envelope<Data>(data: Data, releaseId: DatasetReleaseId): LegalEnvelope<
 
 export class LegalQueryService {
   public constructor(private readonly repository: LegalReadRepository) {}
+
+  // Finds the provision a human-readable citation points at. Document numbers
+  // are matched on letters and digits only, with Đ folded to D, so
+  // "327/2026/NĐ-CP", "327-2026-ND-CP" and "327/2026/nđ-cp" name the same
+  // document. The article is matched on the heading "Điều N".
+  private async locateByCitation(
+    context: QueryContext,
+    operation: LegalReadOperation,
+    documentNumber: string,
+    article: number,
+  ): Promise<
+    | { readonly ok: true; readonly provisionId: ProvisionId }
+    | {
+        readonly ok: false;
+        readonly reason: "DOCUMENT_NOT_IN_CORPUS" | "ARTICLE_NOT_IN_DOCUMENT" | "ARTICLE_AMBIGUOUS";
+        readonly candidateVersionIds: readonly ProvisionVersionId[];
+      }
+  > {
+    const catalog = await executeLegalRead(operation, () =>
+      this.repository.listCatalogVersions(context.datasetReleaseId, operation),
+    );
+    assertResultLimit("Catalog versions", catalog.length, maximumCatalogVersions);
+    const wanted = citationKey(documentNumber);
+    const inDocument = catalog.filter((version) => citationKey(version.documentNumber) === wanted);
+    if (inDocument.length === 0) {
+      return { candidateVersionIds: [], ok: false, reason: "DOCUMENT_NOT_IN_CORPUS" };
+    }
+    const matching = inDocument.filter(
+      (version) => headingArticleNumber(version.heading) === article,
+    );
+    const provisionIds = [...new Set(matching.map((version) => version.provisionId))];
+    const [provisionId] = provisionIds;
+    if (provisionId === undefined) {
+      return { candidateVersionIds: [], ok: false, reason: "ARTICLE_NOT_IN_DOCUMENT" };
+    }
+    if (provisionIds.length > 1) {
+      return {
+        candidateVersionIds: matching.map((version) => version.provisionVersionId),
+        ok: false,
+        reason: "ARTICLE_AMBIGUOUS",
+      };
+    }
+    return { ok: true, provisionId };
+  }
+
+  public async lookupByCitation(
+    input: {
+      readonly context: QueryContextInput;
+      readonly documentNumber: string;
+      readonly article: number;
+      readonly validAt: string;
+    },
+    executionInput: QueryExecutionInput,
+  ): Promise<LookupByCitationOutput> {
+    const context = parseContext(input.context);
+    const execution = parseExecution(executionInput);
+    const operation = operationFor(context, execution);
+    if (!Number.isInteger(input.article) || input.article < 1 || input.article > 10_000) {
+      throw new LegalQueryError("INVALID_INPUT", "article must be a positive whole number");
+    }
+    if (input.documentNumber.trim().length === 0 || input.documentNumber.length > 256) {
+      throw new LegalQueryError("INVALID_INPUT", "documentNumber is invalid");
+    }
+    const located = await this.locateByCitation(
+      context,
+      operation,
+      input.documentNumber,
+      input.article,
+    );
+    if (!located.ok) {
+      return envelope(
+        {
+          candidateVersionIds: located.candidateVersionIds,
+          reason: located.reason,
+          status: "unknown",
+        },
+        context.datasetReleaseId,
+      );
+    }
+    return this.getProvisionAt(
+      { context: input.context, provisionId: located.provisionId, validAt: input.validAt },
+      executionInput,
+    );
+  }
+
+  public async checkCitation(
+    input: {
+      readonly context: QueryContextInput;
+      readonly documentNumber: string;
+      readonly article: number;
+      readonly validAt: string;
+      readonly quotedText: string | null;
+    },
+    executionInput: QueryExecutionInput,
+  ): Promise<CheckCitationOutput> {
+    const context = parseContext(input.context);
+    const validAt = parseDomainInput("validAt", input.validAt, parseLegalDate);
+    if (input.quotedText !== null && input.quotedText.length > 20_000) {
+      throw new LegalQueryError("INVALID_INPUT", "quotedText exceeds the public limit");
+    }
+    const lookup = await this.lookupByCitation(input, executionInput);
+    const base = {
+      article: input.article,
+      documentNumber: input.documentNumber,
+      status: "resolved" as const,
+      validAt,
+    };
+    if (lookup.data.status !== "resolved") {
+      const exists =
+        lookup.data.status === "unknown" &&
+        lookup.data.reason !== "DOCUMENT_NOT_IN_CORPUS" &&
+        lookup.data.reason !== "ARTICLE_NOT_IN_DOCUMENT";
+      return envelope(
+        {
+          ...base,
+          citation: null,
+          exists,
+          inForceAtDate: false,
+          target: null,
+          textMatch: { similarity: null, status: "not_checked" },
+        },
+        context.datasetReleaseId,
+      );
+    }
+    const similarity =
+      input.quotedText === null
+        ? null
+        : wordDice(input.quotedText, lookup.data.provision.legalText);
+    const status: CitationTextMatch | "not_checked" =
+      similarity === null
+        ? "not_checked"
+        : similarity >= 0.995
+          ? "exact"
+          : similarity >= 0.9
+            ? "close"
+            : "different";
+    return envelope(
+      {
+        ...base,
+        citation: lookup.data.citation,
+        exists: true,
+        inForceAtDate: true,
+        target: {
+          provisionId: lookup.data.provision.provisionId,
+          provisionVersionId: lookup.data.provision.provisionVersionId,
+        },
+        textMatch: { similarity, status },
+      },
+      context.datasetReleaseId,
+    );
+  }
 
   public async getProvisionAt(
     input: {

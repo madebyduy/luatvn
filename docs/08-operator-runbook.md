@@ -232,6 +232,18 @@ Trên màn hình tra cứu, các cụm như `Điều 7 của Nghị định này
 
 Giới hạn hiện tại: Luật gọi theo **tên** ("Luật An ninh mạng") chưa giải được vì kho chỉ lưu số hiệu; tham chiếu tới **Chương** chưa hỗ trợ; tham chiếu bị **ngắt dòng** không thành link.
 
+## 4b3. Địa chỉ trích dẫn vĩnh viễn và kiểm chứng trích dẫn (UX-120)
+
+Mỗi Điều tại một ngày có một địa chỉ cố định trên API, viết đúng cách người ta trích luật:
+
+```
+GET /c/45-2019-QH14/dieu-94@2023-06-15
+```
+
+Trả về đúng phiên bản Điều 94 có hiệu lực ngày 15/06/2023, kèm bằng chứng (nguồn, SHA-256, mức đã kiểm). Số hiệu nhận cả dạng in (`45/2019/QH14`, cần mã hoá `/`) và dạng slug (`45-2019-QH14`); chữ Đ và dấu không ảnh hưởng. Địa chỉ không đổi khi có bản phát hành mới; câu trả lời có thể đổi nếu bản mới sửa dữ liệu, và luôn ghi rõ `release`.
+
+Kiểm một câu trích lấy từ bất kỳ đâu: `POST /v1/citations/check` với `documentNumber`, `article`, `validAt`, `quotedText` (tuỳ chọn) - hoặc dùng view **Kiểm chứng trích dẫn** trên web, hoặc công cụ MCP `kiem_chung_trich_dan`. Kết quả **ba câu tách bạch**: Điều có trong kho không; có hiệu lực tại ngày đó không; đoạn trích khớp nguyên văn không (`exact` / `close` / `different` theo tỉ lệ trùng từ). Không câu nào là kết luận pháp lý.
+
 ## 4c. Chạy MCP cho trợ lý AI (P-040)
 
 ```bash

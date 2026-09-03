@@ -1,8 +1,9 @@
-export type ViewName = "tra-cuu" | "so-sanh" | "luoc-su";
+export type ViewName = "tra-cuu" | "so-sanh" | "luoc-su" | "kiem-chung";
 
-export const viewNames: readonly ViewName[] = ["tra-cuu", "so-sanh", "luoc-su"];
+export const viewNames: readonly ViewName[] = ["tra-cuu", "so-sanh", "luoc-su", "kiem-chung"];
 
 export const viewLabels: Record<ViewName, string> = {
+  "kiem-chung": "Kiểm chứng trích dẫn",
   "luoc-su": "Lược sử sửa đổi",
   "so-sanh": "So sánh hai phiên bản",
   "tra-cuu": "Tra cứu theo thời điểm",

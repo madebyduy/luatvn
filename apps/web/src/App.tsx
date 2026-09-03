@@ -16,6 +16,7 @@ import {
 import { DiffView } from "./components/DiffView.js";
 import { DocumentTree } from "./components/DocumentTree.js";
 import { EvidencePanel, MetadataPanel } from "./components/MetadataPanel.js";
+import { CitationCheckView } from "./components/CitationCheckView.js";
 import { ProvisionResult } from "./components/ProvisionResult.js";
 import { TraceView } from "./components/TraceView.js";
 import {
@@ -282,118 +283,141 @@ export function App() {
         </div>
 
         <main className="content">
-          <form className="toolbar" onSubmit={onSubmit}>
-            <fieldset>
-              <legend className="visually-hidden">{viewLabels[form.view]}</legend>
+          {form.view === "kiem-chung" ? (
+            <CitationCheckView
+              context={{
+                datasetReleaseId: form.datasetReleaseId,
+                knownAt: form.knownAt === "" ? currentInstant() : form.knownAt,
+              }}
+            />
+          ) : (
+            <>
+              <form className="toolbar" onSubmit={onSubmit}>
+                <fieldset>
+                  <legend className="visually-hidden">{viewLabels[form.view]}</legend>
 
-              {form.view === "tra-cuu" && (
-                <div className="toolbar-field">
-                  <label htmlFor="validAt">Ngày pháp lý cần hỏi</label>
-                  <input
-                    id="validAt"
-                    onChange={(event) => {
-                      setForm((previous) => ({ ...previous, validAt: event.target.value }));
-                    }}
-                    required
-                    type="date"
-                    value={form.validAt}
-                  />
-                </div>
-              )}
+                  {form.view === "tra-cuu" && (
+                    <div className="toolbar-field">
+                      <label htmlFor="validAt">Ngày pháp lý cần hỏi</label>
+                      <input
+                        id="validAt"
+                        onChange={(event) => {
+                          setForm((previous) => ({ ...previous, validAt: event.target.value }));
+                        }}
+                        required
+                        type="date"
+                        value={form.validAt}
+                      />
+                    </div>
+                  )}
 
-              {form.view === "so-sanh" && (
-                <>
-                  <div className="toolbar-field">
-                    <label htmlFor="fromVersionId">Phiên bản trước</label>
-                    <select
-                      id="fromVersionId"
-                      onChange={(event) => {
-                        setForm((previous) => ({ ...previous, fromVersionId: event.target.value }));
-                      }}
-                      value={form.fromVersionId}
-                    >
-                      <option value="">— Chọn phiên bản —</option>
-                      {versions.map((version) => (
-                        <option key={version.provisionVersionId} value={version.provisionVersionId}>
-                          {versionLabel(version)}
-                        </option>
-                      ))}
-                    </select>
+                  {form.view === "so-sanh" && (
+                    <>
+                      <div className="toolbar-field">
+                        <label htmlFor="fromVersionId">Phiên bản trước</label>
+                        <select
+                          id="fromVersionId"
+                          onChange={(event) => {
+                            setForm((previous) => ({
+                              ...previous,
+                              fromVersionId: event.target.value,
+                            }));
+                          }}
+                          value={form.fromVersionId}
+                        >
+                          <option value="">— Chọn phiên bản —</option>
+                          {versions.map((version) => (
+                            <option
+                              key={version.provisionVersionId}
+                              value={version.provisionVersionId}
+                            >
+                              {versionLabel(version)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="toolbar-field">
+                        <label htmlFor="toVersionId">Phiên bản sau</label>
+                        <select
+                          id="toVersionId"
+                          onChange={(event) => {
+                            setForm((previous) => ({
+                              ...previous,
+                              toVersionId: event.target.value,
+                            }));
+                          }}
+                          value={form.toVersionId}
+                        >
+                          <option value="">— Chọn phiên bản —</option>
+                          {versions.map((version) => (
+                            <option
+                              key={version.provisionVersionId}
+                              value={version.provisionVersionId}
+                            >
+                              {versionLabel(version)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  )}
+
+                  {form.view === "luoc-su" && (
+                    <p className="toolbar-note">
+                      Hiển thị quan hệ sửa đổi đã được người kiểm chứng, kèm nguồn của từng quan hệ.
+                    </p>
+                  )}
+
+                  <button type="submit">
+                    {form.view === "so-sanh"
+                      ? "So sánh"
+                      : form.view === "luoc-su"
+                        ? "Xem lược sử"
+                        : "Tra cứu"}
+                  </button>
+                </fieldset>
+              </form>
+
+              <div aria-live="polite" className="results" ref={resultsRef} tabIndex={-1}>
+                {outcome.status === "loading" && (
+                  <p className="doc-card state-loading" role="status">
+                    Đang tra cứu…
+                  </p>
+                )}
+
+                {outcome.status === "failed" && outcome.failure !== null && (
+                  <div className="doc-card state-conflict" role="alert">
+                    <p className="state-badge">Không tra cứu được</p>
+                    <p>{outcome.failure}</p>
+                    <p className="note">
+                      Câu hỏi của bạn vẫn được giữ nguyên trên thanh địa chỉ, thử lại khi máy chủ
+                      sẵn sàng.
+                    </p>
                   </div>
-                  <div className="toolbar-field">
-                    <label htmlFor="toVersionId">Phiên bản sau</label>
-                    <select
-                      id="toVersionId"
-                      onChange={(event) => {
-                        setForm((previous) => ({ ...previous, toVersionId: event.target.value }));
-                      }}
-                      value={form.toVersionId}
-                    >
-                      <option value="">— Chọn phiên bản —</option>
-                      {versions.map((version) => (
-                        <option key={version.provisionVersionId} value={version.provisionVersionId}>
-                          {versionLabel(version)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
+                )}
 
-              {form.view === "luoc-su" && (
-                <p className="toolbar-note">
-                  Hiển thị quan hệ sửa đổi đã được người kiểm chứng, kèm nguồn của từng quan hệ.
-                </p>
-              )}
+                {outcome.status === "ready" && outcome.provision !== null && (
+                  <ProvisionResult response={outcome.provision} />
+                )}
+                {outcome.status === "ready" && outcome.comparison !== null && (
+                  <DiffView response={outcome.comparison} />
+                )}
+                {outcome.status === "ready" && outcome.amendments !== null && (
+                  <TraceView provisionId={form.provisionId} response={outcome.amendments} />
+                )}
 
-              <button type="submit">
-                {form.view === "so-sanh"
-                  ? "So sánh"
-                  : form.view === "luoc-su"
-                    ? "Xem lược sử"
-                    : "Tra cứu"}
-              </button>
-            </fieldset>
-          </form>
-
-          <div aria-live="polite" className="results" ref={resultsRef} tabIndex={-1}>
-            {outcome.status === "loading" && (
-              <p className="doc-card state-loading" role="status">
-                Đang tra cứu…
-              </p>
-            )}
-
-            {outcome.status === "failed" && outcome.failure !== null && (
-              <div className="doc-card state-conflict" role="alert">
-                <p className="state-badge">Không tra cứu được</p>
-                <p>{outcome.failure}</p>
-                <p className="note">
-                  Câu hỏi của bạn vẫn được giữ nguyên trên thanh địa chỉ, thử lại khi máy chủ sẵn
-                  sàng.
-                </p>
+                {outcome.status === "idle" && (
+                  <p className="doc-card note">
+                    {form.view === "so-sanh"
+                      ? "Chọn một điều khoản ở danh mục bên trái, rồi chọn hai phiên bản để xem phần thay đổi."
+                      : form.view === "luoc-su"
+                        ? "Chọn một điều khoản ở danh mục bên trái để xem chuỗi sửa đổi."
+                        : "Chọn một điều khoản ở danh mục bên trái và nhập ngày pháp lý để bắt đầu."}
+                  </p>
+                )}
               </div>
-            )}
-
-            {outcome.status === "ready" && outcome.provision !== null && (
-              <ProvisionResult response={outcome.provision} />
-            )}
-            {outcome.status === "ready" && outcome.comparison !== null && (
-              <DiffView response={outcome.comparison} />
-            )}
-            {outcome.status === "ready" && outcome.amendments !== null && (
-              <TraceView provisionId={form.provisionId} response={outcome.amendments} />
-            )}
-
-            {outcome.status === "idle" && (
-              <p className="doc-card note">
-                {form.view === "so-sanh"
-                  ? "Chọn một điều khoản ở danh mục bên trái, rồi chọn hai phiên bản để xem phần thay đổi."
-                  : form.view === "luoc-su"
-                    ? "Chọn một điều khoản ở danh mục bên trái để xem chuỗi sửa đổi."
-                    : "Chọn một điều khoản ở danh mục bên trái và nhập ngày pháp lý để bắt đầu."}
-              </p>
-            )}
-          </div>
+            </>
+          )}
         </main>
 
         <aside aria-label="Thuộc tính và bằng chứng" className="rail rail-right">

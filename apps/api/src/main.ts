@@ -28,7 +28,11 @@ async function main(): Promise<void> {
   );
   const repository = new ManualDatasetRepository(release);
   const legalQueryService = new LegalQueryService(repository);
-  const app = buildApi({ legalQueryService, operationTimeoutMs: config.operationTimeoutMs });
+  const app = buildApi({
+    datasetReleaseId: release.datasetReleaseId,
+    legalQueryService,
+    operationTimeoutMs: config.operationTimeoutMs,
+  });
 
   app.get(
     "/ready",

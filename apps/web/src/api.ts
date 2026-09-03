@@ -1,9 +1,11 @@
 import {
+  CheckCitationResponseSchema,
   CompareProvisionVersionsResponseSchema,
   ErrorResponseSchema,
   GetCatalogResponseSchema,
   GetProvisionAtResponseSchema,
   TraceAmendmentsResponseSchema,
+  type CheckCitationResponse,
   type CompareProvisionVersionsResponse,
   type GetCatalogResponse,
   type GetProvisionAtResponse,
@@ -11,6 +13,7 @@ import {
 } from "@luatvn/contracts";
 
 export type ProvisionAtResponse = GetProvisionAtResponse;
+export type CitationCheckResponse = CheckCitationResponse;
 export type CatalogResponse = GetCatalogResponse;
 export type CompareResponse = CompareProvisionVersionsResponse;
 export type AmendmentsResponse = TraceAmendmentsResponse;
@@ -130,6 +133,30 @@ export function fetchComparison(
       toVersionId: query.toVersionId,
     },
     CompareProvisionVersionsResponseSchema,
+  );
+}
+
+// "Does this quotation say what the law said on that date?" - addressed the way
+// a person writes a citation, not by an internal identifier.
+export function checkCitation(
+  context: QueryContext,
+  query: {
+    readonly documentNumber: string;
+    readonly article: number;
+    readonly validAt: string;
+    readonly quotedText: string | null;
+  },
+): Promise<CitationCheckResponse> {
+  return postParsed(
+    "/v1/citations/check",
+    {
+      article: query.article,
+      context: contextBody(context),
+      documentNumber: query.documentNumber,
+      quotedText: query.quotedText,
+      validAt: query.validAt,
+    },
+    CheckCitationResponseSchema,
   );
 }
 

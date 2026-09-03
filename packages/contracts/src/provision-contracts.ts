@@ -222,6 +222,89 @@ export const GetProvisionAtResponseSchema = z
   })
   .strict();
 
+// ---- Citations addressed the way people write them (UX-120) ----
+
+const DocumentNumberSchema = z.string().trim().min(1).max(256);
+const ArticleNumberSchema = z.number().int().min(1).max(10_000);
+
+export const LookupByCitationRequestSchema = z
+  .object({
+    article: ArticleNumberSchema,
+    context: QueryContextSchema,
+    documentNumber: DocumentNumberSchema,
+    validAt: LegalDateSchema,
+  })
+  .strict();
+
+const CitationNotLocatedDataSchema = z
+  .object({
+    candidateVersionIds: z.array(ProvisionVersionIdSchema).readonly(),
+    reason: z.enum(["DOCUMENT_NOT_IN_CORPUS", "ARTICLE_NOT_IN_DOCUMENT", "ARTICLE_AMBIGUOUS"]),
+    status: z.literal("unknown"),
+  })
+  .strict();
+
+export const LookupByCitationResponseSchema = z
+  .object({
+    data: z.union([
+      ResolvedProvisionDataSchema,
+      UnknownProvisionDataSchema,
+      ConflictedProvisionDataSchema,
+      CitationNotLocatedDataSchema,
+    ]),
+    release: ReleaseSchema,
+    untrustedContent: z.literal(true),
+    warnings: WarningSchema,
+  })
+  .strict();
+
+export const CheckCitationRequestSchema = z
+  .object({
+    article: ArticleNumberSchema,
+    context: QueryContextSchema,
+    documentNumber: DocumentNumberSchema,
+    quotedText: z.string().max(20_000).nullable(),
+    validAt: LegalDateSchema,
+  })
+  .strict();
+
+export const CheckCitationResponseSchema = z
+  .object({
+    data: z
+      .object({
+        article: ArticleNumberSchema,
+        citation: CitationSchema.nullable(),
+        documentNumber: DocumentNumberSchema,
+        exists: z.boolean(),
+        inForceAtDate: z.boolean(),
+        status: z.literal("resolved"),
+        target: z
+          .object({
+            provisionId: ProvisionIdSchema,
+            provisionVersionId: ProvisionVersionIdSchema,
+          })
+          .strict()
+          .nullable(),
+        textMatch: z
+          .object({
+            similarity: z.number().min(0).max(1).nullable(),
+            status: z.enum(["exact", "close", "different", "not_checked"]),
+          })
+          .strict(),
+        validAt: LegalDateSchema,
+      })
+      .strict(),
+    release: ReleaseSchema,
+    untrustedContent: z.literal(true),
+    warnings: WarningSchema,
+  })
+  .strict();
+
+export type LookupByCitationRequest = z.infer<typeof LookupByCitationRequestSchema>;
+export type LookupByCitationResponse = z.infer<typeof LookupByCitationResponseSchema>;
+export type CheckCitationRequest = z.infer<typeof CheckCitationRequestSchema>;
+export type CheckCitationResponse = z.infer<typeof CheckCitationResponseSchema>;
+
 const DiffChunkSchema = z
   .object({
     lines: z.array(z.string()).readonly(),

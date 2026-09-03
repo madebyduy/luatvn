@@ -75,9 +75,10 @@ afterEach(async () => {
 });
 
 describe("MCP tool surface", () => {
-  it("publishes the four lookup tools and names the served release", async () => {
+  it("publishes the five tools and names the served release", async () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).toSorted()).toEqual([
+      "kiem_chung_trich_dan",
       "liet_ke_danh_muc",
       "so_sanh_hai_phien_ban",
       "tra_cuu_dieu_khoan_tai_thoi_diem",

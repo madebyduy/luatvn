@@ -521,6 +521,37 @@ button[type="submit"] {
   cursor: help;
 }
 
+/* Citation check: the text-match verdict has its own tone scale so it is never
+   confused with the review-status chip beside it. */
+.chip-match-ok {
+  background: var(--ok-surface);
+  color: var(--ok);
+}
+
+.chip-match-warn {
+  background: var(--warn-surface);
+  color: var(--warn);
+}
+
+.chip-match-bad {
+  background: var(--bad-surface);
+  color: var(--bad);
+}
+
+.chip-match-muted {
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.toolbar-field-wide {
+  flex-basis: 100%;
+}
+
+.toolbar-field-wide textarea {
+  font: inherit;
+  width: 100%;
+}
+
 /* Servable like verified, so the same green family - but dashed, because no
    person has looked yet. Visibly different from both neighbours on purpose. */
 .chip-machine_checked {

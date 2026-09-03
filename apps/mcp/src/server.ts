@@ -1,5 +1,6 @@
 import type { LegalQueryService, QueryExecutionInput } from "@luatvn/application";
 import {
+  CheckCitationRequestSchema,
   CompareProvisionVersionsRequestSchema,
   GetCatalogRequestSchema,
   GetProvisionAtRequestSchema,
@@ -157,6 +158,34 @@ function toolDefinitions(datasetReleaseId: string): readonly Tool[] {
       name: "xem_lich_su_sua_doi",
       title: "Xem lịch sử sửa đổi của một điều khoản",
     },
+    {
+      description: [
+        "Kiểm chứng một trích dẫn pháp luật lấy từ bất kỳ đâu: cho số hiệu văn bản, số Điều, ngày pháp lý và (tuỳ chọn) đoạn văn được trích.",
+        "Trả lời ba câu tách bạch: Điều đó có trong kho không; có phiên bản hiệu lực tại ngày đó không; đoạn trích có khớp nguyên văn không (exact/close/different).",
+        "Dùng công cụ này trước khi khẳng định một câu trích luật là đúng hay sai. Kho chưa có văn bản thì kết quả nói rõ, không suy đoán.",
+        servedRelease,
+      ].join(" "),
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          article: { description: "Số Điều, ví dụ 94.", minimum: 1, type: "integer" },
+          documentNumber: {
+            description: "Số hiệu văn bản, ví dụ 45/2019/QH14 hoặc 327/2026/NĐ-CP.",
+            type: "string",
+          },
+          quotedText: {
+            description:
+              "Đoạn văn được trích để so với nguyên văn. Bỏ trống nếu chỉ cần kiểm tồn tại và hiệu lực.",
+            type: "string",
+          },
+          validAt: { description: "Ngày pháp lý cần kiểm, định dạng YYYY-MM-DD.", type: "string" },
+        },
+        required: ["documentNumber", "article", "validAt"],
+        type: "object",
+      },
+      name: "kiem_chung_trich_dan",
+      title: "Kiểm chứng một trích dẫn pháp luật",
+    },
   ];
 }
 
@@ -227,6 +256,20 @@ export function buildMcpServer(options: BuildMcpServerOptions): Server {
             return failure("INVALID_INPUT: cần provisionId hợp lệ và maxDepth là 1 hoặc 2.");
           }
           const result = await options.legalQueryService.traceAmendments(parsed.data, execution);
+          return toolResult(options.datasetReleaseId, result, maximumResultBytes);
+        }
+        case "kiem_chung_trich_dan": {
+          const parsed = CheckCitationRequestSchema.safeParse({
+            quotedText: null,
+            ...args,
+            context,
+          });
+          if (!parsed.success) {
+            return failure(
+              "INVALID_INPUT: cần documentNumber, article là số nguyên dương, validAt dạng YYYY-MM-DD; quotedText tuỳ chọn.",
+            );
+          }
+          const result = await options.legalQueryService.checkCitation(parsed.data, execution);
           return toolResult(options.datasetReleaseId, result, maximumResultBytes);
         }
         default: {
