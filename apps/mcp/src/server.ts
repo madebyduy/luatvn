@@ -2,6 +2,7 @@ import type { LegalQueryService, QueryExecutionInput } from "@luatvn/application
 import {
   CheckCitationRequestSchema,
   CompareProvisionVersionsRequestSchema,
+  SearchProvisionsRequestSchema,
   GetCatalogRequestSchema,
   GetProvisionAtRequestSchema,
   TraceAmendmentsRequestSchema,
@@ -186,6 +187,31 @@ function toolDefinitions(datasetReleaseId: string): readonly Tool[] {
       name: "kiem_chung_trich_dan",
       title: "Kiểm chứng một trích dẫn pháp luật",
     },
+    {
+      description: [
+        "Tìm các điều khoản trong kho liên quan tới một tình huống mô tả bằng tiếng thường (ví dụ: 'công ty nợ lương tôi 2 tháng'), có hiệu lực tại một ngày.",
+        "Đây là tìm theo từ (BM25), không phải hiểu nghĩa: hãy dùng từ khoá pháp lý có khả năng xuất hiện trong văn bản.",
+        "Kết quả rỗng hoặc 'nothingRelevant' nghĩa là kho chưa có - phải nói thẳng điều đó, không tự bổ sung từ kiến thức riêng.",
+        servedRelease,
+      ].join(" "),
+      inputSchema: {
+        additionalProperties: false,
+        properties: {
+          limit: {
+            description: "Số kết quả tối đa, 1-20.",
+            maximum: 20,
+            minimum: 1,
+            type: "integer",
+          },
+          query: { description: "Tình huống hoặc từ khoá, tối đa 500 ký tự.", type: "string" },
+          validAt: { description: "Ngày pháp lý, định dạng YYYY-MM-DD.", type: "string" },
+        },
+        required: ["query", "validAt"],
+        type: "object",
+      },
+      name: "tim_dieu_khoan_theo_tinh_huong",
+      title: "Tìm điều khoản theo tình huống",
+    },
   ];
 }
 
@@ -256,6 +282,16 @@ export function buildMcpServer(options: BuildMcpServerOptions): Server {
             return failure("INVALID_INPUT: cần provisionId hợp lệ và maxDepth là 1 hoặc 2.");
           }
           const result = await options.legalQueryService.traceAmendments(parsed.data, execution);
+          return toolResult(options.datasetReleaseId, result, maximumResultBytes);
+        }
+        case "tim_dieu_khoan_theo_tinh_huong": {
+          const parsed = SearchProvisionsRequestSchema.safeParse({ ...args, context });
+          if (!parsed.success) {
+            return failure(
+              "INVALID_INPUT: cần query (1-500 ký tự) và validAt dạng YYYY-MM-DD; limit 1-20.",
+            );
+          }
+          const result = await options.legalQueryService.searchProvisions(parsed.data, execution);
           return toolResult(options.datasetReleaseId, result, maximumResultBytes);
         }
         case "kiem_chung_trich_dan": {

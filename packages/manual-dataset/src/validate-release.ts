@@ -118,6 +118,20 @@ export function validateReleaseForPublish(
     }
   });
 
+  // An applicability condition is a legal claim about who a provision binds. A
+  // machine may draft it; it does not publish until a named person has read
+  // it. There is no machine_checked tier here, because no cross-check can
+  // verify an interpretation.
+  // Callers that hand over a raw parsed object rather than a decoded one may
+  // omit the field entirely; absent means none, not a crash.
+  (dataset.applicability ?? []).forEach((condition, index) => {
+    const locator = `applicability[${index}] ${condition.conditionId}`;
+    if (condition.reviewStatus !== "verified") {
+      report(locator, "applicability conditions must be verified by a person before publish");
+    }
+    checkEvidence(locator, condition.evidence);
+  });
+
   dataset.amendments.forEach((amendment, index) => {
     const locator = `amendments[${index}] ${amendment.amendmentId}`;
     if (amendment.reviewStatus !== "verified") {

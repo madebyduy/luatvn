@@ -23,6 +23,7 @@ import {
 } from "@luatvn/domain";
 
 import type { LegalReadOperation, LegalReadRepository } from "./ports/legal-read-repository.js";
+import { lexicalSearch } from "./search.js";
 
 const legalDataWarning = "LEGAL_DATA_NOT_ADVICE";
 export const maximumProvisionVersionsPerQuery = 256;
@@ -137,6 +138,32 @@ export type CheckCitationOutput = LegalEnvelope<{
     readonly similarity: number | null;
   };
   readonly citation: LegalCitation | null;
+}>;
+
+// Tier 0 of asking in plain language (UX-100): a ranked list of provisions
+// for a situation typed in ordinary words. "corpusEmpty" and
+// "nothingRelevant" are answers, shown as such, never papered over with the
+// least-bad match.
+export interface SearchResult {
+  readonly provisionId: ProvisionId;
+  readonly provisionVersionId: ProvisionVersionId;
+  readonly documentNumber: string;
+  readonly heading: string | null;
+  readonly snippet: string;
+  readonly score: number;
+  readonly reviewStatus: PublishedProvisionVersion["reviewStatus"];
+  readonly validFrom: LegalDate;
+  readonly validTo: LegalDate | null;
+}
+
+export type SearchProvisionsOutput = LegalEnvelope<{
+  readonly status: "resolved";
+  readonly query: string;
+  readonly validAt: LegalDate;
+  readonly corpusEmpty: boolean;
+  readonly nothingRelevant: boolean;
+  readonly retriever: "lexical-bm25";
+  readonly results: readonly SearchResult[];
 }>;
 
 export type CompareProvisionVersionsOutput = LegalEnvelope<{
@@ -627,6 +654,68 @@ export class LegalQueryService {
           provisionVersionId: lookup.data.provision.provisionVersionId,
         },
         textMatch: { similarity, status },
+      },
+      context.datasetReleaseId,
+    );
+  }
+
+  public async searchProvisions(
+    input: {
+      readonly context: QueryContextInput;
+      readonly query: string;
+      readonly validAt: string;
+      readonly limit?: number | undefined;
+    },
+    executionInput: QueryExecutionInput,
+  ): Promise<SearchProvisionsOutput> {
+    const context = parseContext(input.context);
+    const execution = parseExecution(executionInput);
+    const operation = operationFor(context, execution);
+    const validAt = parseDomainInput("validAt", input.validAt, parseLegalDate);
+    const query = input.query.normalize("NFC").trim();
+    if (query.length === 0 || query.length > 500) {
+      throw new LegalQueryError("INVALID_INPUT", "query must be 1 to 500 characters");
+    }
+    const limit = input.limit ?? 8;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+      throw new LegalQueryError("INVALID_INPUT", "limit must be a whole number from 1 to 20");
+    }
+    const catalog = await executeLegalRead(operation, () =>
+      this.repository.listCatalogVersions(context.datasetReleaseId, operation),
+    );
+    assertResultLimit("Catalog versions", catalog.length, maximumCatalogVersions);
+
+    // Only versions a reader may be shown, and only those in force on the date
+    // asked - the same rule the point-in-time resolver applies, so a search hit
+    // is always something getProvisionAt would also return.
+    const eligible = catalog.filter(
+      (version) =>
+        isServableReviewStatus(version.reviewStatus) &&
+        version.validTime.from <= validAt &&
+        (version.validTime.to === null || validAt < version.validTime.to) &&
+        version.systemTime.from <= context.knownAt &&
+        (version.systemTime.to === null || context.knownAt < version.systemTime.to),
+    );
+    const hits = lexicalSearch(eligible, query, { limit });
+    return envelope(
+      {
+        corpusEmpty: eligible.length === 0,
+        nothingRelevant: eligible.length > 0 && hits.length === 0,
+        query,
+        results: hits.map((hit) => ({
+          documentNumber: hit.version.documentNumber,
+          heading: hit.version.heading,
+          provisionId: hit.version.provisionId,
+          provisionVersionId: hit.version.provisionVersionId,
+          reviewStatus: hit.version.reviewStatus,
+          score: hit.score,
+          snippet: hit.snippet,
+          validFrom: hit.version.validTime.from,
+          validTo: hit.version.validTime.to,
+        })),
+        retriever: "lexical-bm25",
+        status: "resolved",
+        validAt,
       },
       context.datasetReleaseId,
     );

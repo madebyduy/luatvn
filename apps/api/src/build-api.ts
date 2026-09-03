@@ -15,6 +15,8 @@ import {
   GetProvisionAtResponseSchema,
   LookupByCitationRequestSchema,
   LookupByCitationResponseSchema,
+  SearchProvisionsRequestSchema,
+  SearchProvisionsResponseSchema,
   TraceAmendmentsRequestSchema,
   TraceAmendmentsResponseSchema,
 } from "@luatvn/contracts";
@@ -285,6 +287,29 @@ export function buildApi(options: BuildApiOptions) {
     async (request) =>
       runWithExecution(request, operationTimeoutMs, (execution) =>
         options.legalQueryService.checkCitation(request.body, execution),
+      ),
+  );
+
+  // A situation in ordinary words -> the provisions in force on the date that
+  // best match it. Lexical baseline; an empty or irrelevant result is a real
+  // answer and is reported as such.
+  app.post(
+    "/v1/search",
+    {
+      schema: {
+        body: SearchProvisionsRequestSchema,
+        response: {
+          200: SearchProvisionsResponseSchema,
+          400: ErrorResponseSchema,
+          408: ErrorResponseSchema,
+          409: ErrorResponseSchema,
+          500: ErrorResponseSchema,
+        },
+      },
+    },
+    async (request) =>
+      runWithExecution(request, operationTimeoutMs, (execution) =>
+        options.legalQueryService.searchProvisions(request.body, execution),
       ),
   );
 

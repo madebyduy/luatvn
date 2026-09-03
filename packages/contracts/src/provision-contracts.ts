@@ -305,6 +305,53 @@ export type LookupByCitationResponse = z.infer<typeof LookupByCitationResponseSc
 export type CheckCitationRequest = z.infer<typeof CheckCitationRequestSchema>;
 export type CheckCitationResponse = z.infer<typeof CheckCitationResponseSchema>;
 
+// ---- Ask in plain language, tier 0 (UX-100) ----
+
+export const SearchProvisionsRequestSchema = z
+  .object({
+    context: QueryContextSchema,
+    limit: z.number().int().min(1).max(20).optional(),
+    query: z.string().trim().min(1).max(500),
+    validAt: LegalDateSchema,
+  })
+  .strict();
+
+const SearchResultSchema = z
+  .object({
+    documentNumber: z.string().min(1).max(256),
+    heading: z.string().max(1_024).nullable(),
+    provisionId: ProvisionIdSchema,
+    provisionVersionId: ProvisionVersionIdSchema,
+    reviewStatus: z.enum(["verified", "machine_checked", "under_review", "unverified"]),
+    score: z.number().min(0).max(1),
+    snippet: z.string().max(512),
+    validFrom: LegalDateSchema,
+    validTo: LegalDateSchema.nullable(),
+  })
+  .strict();
+
+export const SearchProvisionsResponseSchema = z
+  .object({
+    data: z
+      .object({
+        corpusEmpty: z.boolean(),
+        nothingRelevant: z.boolean(),
+        query: z.string().min(1).max(500),
+        results: z.array(SearchResultSchema).max(20).readonly(),
+        retriever: z.literal("lexical-bm25"),
+        status: z.literal("resolved"),
+        validAt: LegalDateSchema,
+      })
+      .strict(),
+    release: ReleaseSchema,
+    untrustedContent: z.literal(true),
+    warnings: WarningSchema,
+  })
+  .strict();
+
+export type SearchProvisionsRequest = z.infer<typeof SearchProvisionsRequestSchema>;
+export type SearchProvisionsResponse = z.infer<typeof SearchProvisionsResponseSchema>;
+
 const DiffChunkSchema = z
   .object({
     lines: z.array(z.string()).readonly(),

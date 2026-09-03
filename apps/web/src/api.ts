@@ -1,12 +1,14 @@
 import {
   CheckCitationResponseSchema,
   CompareProvisionVersionsResponseSchema,
+  SearchProvisionsResponseSchema,
   ErrorResponseSchema,
   GetCatalogResponseSchema,
   GetProvisionAtResponseSchema,
   TraceAmendmentsResponseSchema,
   type CheckCitationResponse,
   type CompareProvisionVersionsResponse,
+  type SearchProvisionsResponse,
   type GetCatalogResponse,
   type GetProvisionAtResponse,
   type TraceAmendmentsResponse,
@@ -14,6 +16,7 @@ import {
 
 export type ProvisionAtResponse = GetProvisionAtResponse;
 export type CitationCheckResponse = CheckCitationResponse;
+export type SearchResponse = SearchProvisionsResponse;
 export type CatalogResponse = GetCatalogResponse;
 export type CompareResponse = CompareProvisionVersionsResponse;
 export type AmendmentsResponse = TraceAmendmentsResponse;
@@ -157,6 +160,22 @@ export function checkCitation(
       validAt: query.validAt,
     },
     CheckCitationResponseSchema,
+  );
+}
+
+export function searchProvisions(
+  context: QueryContext,
+  query: { readonly query: string; readonly validAt: string; readonly limit?: number },
+): Promise<SearchResponse> {
+  return postParsed(
+    "/v1/search",
+    {
+      context: contextBody(context),
+      query: query.query,
+      validAt: query.validAt,
+      ...(query.limit === undefined ? {} : { limit: query.limit }),
+    },
+    SearchProvisionsResponseSchema,
   );
 }
 

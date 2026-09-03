@@ -1,8 +1,15 @@
-export type ViewName = "tra-cuu" | "so-sanh" | "luoc-su" | "kiem-chung";
+export type ViewName = "hoi" | "tra-cuu" | "so-sanh" | "luoc-su" | "kiem-chung";
 
-export const viewNames: readonly ViewName[] = ["tra-cuu", "so-sanh", "luoc-su", "kiem-chung"];
+export const viewNames: readonly ViewName[] = [
+  "hoi",
+  "tra-cuu",
+  "so-sanh",
+  "luoc-su",
+  "kiem-chung",
+];
 
 export const viewLabels: Record<ViewName, string> = {
+  hoi: "Hỏi bằng tiếng thường",
   "kiem-chung": "Kiểm chứng trích dẫn",
   "luoc-su": "Lược sử sửa đổi",
   "so-sanh": "So sánh hai phiên bản",
@@ -14,6 +21,7 @@ export interface TimeMachineState {
   readonly fromVersionId: string;
   readonly knownAt: string;
   readonly provisionId: string;
+  readonly query: string;
   readonly toVersionId: string;
   readonly validAt: string;
   readonly view: ViewName;
@@ -24,6 +32,7 @@ export const emptyState: TimeMachineState = {
   fromVersionId: "",
   knownAt: "",
   provisionId: "",
+  query: "",
   toVersionId: "",
   validAt: "",
   view: "tra-cuu",
@@ -34,6 +43,7 @@ const parameterNames = {
   fromVersionId: "from",
   knownAt: "knownAt",
   provisionId: "provision",
+  query: "q",
   toVersionId: "to",
   validAt: "validAt",
   view: "view",
@@ -54,6 +64,7 @@ export function parseTimeMachineState(search: string): TimeMachineState {
     fromVersionId: parameters.get(parameterNames.fromVersionId) ?? "",
     knownAt: parameters.get(parameterNames.knownAt) ?? "",
     provisionId: parameters.get(parameterNames.provisionId) ?? "",
+    query: parameters.get(parameterNames.query) ?? "",
     toVersionId: parameters.get(parameterNames.toVersionId) ?? "",
     validAt: parameters.get(parameterNames.validAt) ?? "",
     view: readView(parameters.get(parameterNames.view)),
@@ -67,6 +78,7 @@ export function toSearchString(state: TimeMachineState): string {
   };
   set(parameterNames.view, state.view);
   set(parameterNames.provisionId, state.provisionId);
+  set(parameterNames.query, state.query);
   set(parameterNames.validAt, state.validAt);
   set(parameterNames.fromVersionId, state.fromVersionId);
   set(parameterNames.toVersionId, state.toVersionId);

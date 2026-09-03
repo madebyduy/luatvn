@@ -232,6 +232,12 @@ Trên màn hình tra cứu, các cụm như `Điều 7 của Nghị định này
 
 Giới hạn hiện tại: Luật gọi theo **tên** ("Luật An ninh mạng") chưa giải được vì kho chỉ lưu số hiệu; tham chiếu tới **Chương** chưa hỗ trợ; tham chiếu bị **ngắt dòng** không thành link.
 
+## 4b4. Hỏi bằng tiếng thường (UX-100, tầng 0)
+
+Tab đầu trên web là một ô nhập: kể tình huống ("công ty nợ lương tôi 2 tháng"), chọn ngày (mặc định hôm nay), nhận danh sách Điều đang hiệu lực khớp nhất, mỗi Điều kèm nhãn tin cậy và link mở nguyên văn tại ngày đó. API: `POST /v1/search`; MCP: `tim_dieu_khoan_theo_tinh_huong`.
+
+Đây là **tìm theo từ** (BM25 trên token đã gập dấu), không phải hiểu nghĩa. Nó tìm được "lương" chứ không suy ra "chậm trả" từ "nợ". Chỉ trả phiên bản `verified`/`machine_checked` đang hiệu lực tại ngày hỏi. Không có gì đủ liên quan thì trả **rỗng và nói rõ** ("kho chưa có" khác "không có gì khớp"), không trả kết quả kém nhất. Không câu nào trong kết quả do máy viết.
+
 ## 4b3. Địa chỉ trích dẫn vĩnh viễn và kiểm chứng trích dẫn (UX-120)
 
 Mỗi Điều tại một ngày có một địa chỉ cố định trên API, viết đúng cách người ta trích luật:

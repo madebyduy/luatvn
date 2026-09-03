@@ -12,6 +12,7 @@ const fullState: TimeMachineState = {
   fromVersionId: "pv_vbpl_a17_e20200101",
   knownAt: "2026-09-01T00:00:00.000Z",
   provisionId: "prov_vbpl_a17",
+  query: "",
   toVersionId: "pv_vbpl_a17_e20240101",
   validAt: "2024-06-01",
   view: "so-sanh",

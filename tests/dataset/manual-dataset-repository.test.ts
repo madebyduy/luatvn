@@ -38,6 +38,7 @@ function repositoryUnderTest(): ManualDatasetRepository {
     datasetReleaseId: syntheticReleaseId,
     provisionVersions: [syntheticVersionOne, syntheticVersionTwo],
     amendments: [syntheticAmendment, chainedAmendment, unverifiedAmendment],
+    applicability: [],
   };
   return new ManualDatasetRepository({ datasetReleaseId: syntheticReleaseId, dataset });
 }

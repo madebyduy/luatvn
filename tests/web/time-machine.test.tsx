@@ -412,6 +412,8 @@ describe("accessibility", () => {
     await user.tab();
     expect(document.activeElement?.textContent).toContain("Bỏ qua, tới nội dung chính");
     await user.tab();
-    expect(document.activeElement?.textContent).toBe("Tra cứu theo thời điểm");
+    // The first tab is the plain-language front door (UX-100); the article
+    // lookup that experts use comes second.
+    expect(document.activeElement?.textContent).toBe("Hỏi bằng tiếng thường");
   });
 });

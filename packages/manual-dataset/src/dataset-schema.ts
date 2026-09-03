@@ -134,6 +134,38 @@ export const amendmentRecordSchema = z
     evidence: toNonEmptyEvidence(record.evidence),
   }));
 
+export const maximumApplicabilityRecords = 10_000;
+
+// "Does this article apply to me?" (UX-130). One condition is one legal claim
+// - "áp dụng cho hộ kinh doanh có doanh thu dưới 100 triệu/năm" - attached to a
+// provision, with evidence pointing at the words in the source that state it.
+// A machine may propose one; only a person may mark it verified, and only
+// verified conditions are ever used to filter what a reader sees.
+export const applicabilityConditionSchema = z
+  .object({
+    conditionId: z
+      .string()
+      .min(1)
+      .max(maximumIdentifierLength)
+      .regex(/^cond_[a-zA-Z0-9_-]+$/u, "conditionId must look like cond_<id>"),
+    provisionId: domainValue(parseProvisionId, maximumIdentifierLength),
+    /** Who the condition is about, in the source's own words: "hộ kinh doanh", "doanh nghiệp", "người lao động". */
+    subject: z.string().min(1).max(256),
+    /** The condition as stated, verbatim or near-verbatim. Never a paraphrase that adds a claim. */
+    condition: z.string().min(1).max(2_000),
+    /** true: the provision applies to the subject; false: it is excluded. */
+    applies: z.boolean(),
+    evidence: z.array(evidenceReferenceSchema).min(1).max(maximumEvidencePerRecord),
+    reviewStatus: reviewStatusSchema,
+  })
+  .strict()
+  .transform((record) => ({
+    ...record,
+    evidence: toNonEmptyEvidence(record.evidence),
+  }));
+
+export type ApplicabilityCondition = z.output<typeof applicabilityConditionSchema>;
+
 export const manualDatasetFileSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -143,9 +175,34 @@ export const manualDatasetFileSchema = z
       .min(1)
       .max(maximumProvisionVersionRecords),
     amendments: z.array(amendmentRecordSchema).max(maximumAmendmentRecords),
+    applicability: z
+      .array(applicabilityConditionSchema)
+      .max(maximumApplicabilityRecords)
+      .default([]),
   })
   .strict()
   .superRefine((file, ctx) => {
+    const knownProvisionIds = new Set<string>(
+      file.provisionVersions.map((version) => version.provisionId),
+    );
+    const seenConditionIds = new Set<string>();
+    file.applicability.forEach((condition, index) => {
+      if (seenConditionIds.has(condition.conditionId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["applicability", index, "conditionId"],
+          message: "conditionId must be unique within a dataset file",
+        });
+      }
+      seenConditionIds.add(condition.conditionId);
+      if (!knownProvisionIds.has(condition.provisionId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["applicability", index, "provisionId"],
+          message: "applicability condition must point at a provision in this file",
+        });
+      }
+    });
     const seenVersionIds = new Set<string>();
     file.provisionVersions.forEach((version, index) => {
       if (version.datasetReleaseId !== file.datasetReleaseId) {

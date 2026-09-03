@@ -17,6 +17,11 @@ export {
   type CongBaoPageErrorCode,
 } from "./congbao-client.js";
 export {
+  proposeApplicability,
+  type ApplicabilityProposalReport,
+  type ApplicabilityProposalResult,
+} from "./applicability.js";
+export {
   crossCheckCongBao,
   type CrossCheckId,
   type CrossCheckInput,

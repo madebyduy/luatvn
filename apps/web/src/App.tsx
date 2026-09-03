@@ -16,6 +16,7 @@ import {
 import { DiffView } from "./components/DiffView.js";
 import { DocumentTree } from "./components/DocumentTree.js";
 import { EvidencePanel, MetadataPanel } from "./components/MetadataPanel.js";
+import { AskView } from "./components/AskView.js";
 import { CitationCheckView } from "./components/CitationCheckView.js";
 import { ProvisionResult } from "./components/ProvisionResult.js";
 import { TraceView } from "./components/TraceView.js";
@@ -283,7 +284,24 @@ export function App() {
         </div>
 
         <main className="content">
-          {form.view === "kiem-chung" ? (
+          {form.view === "hoi" ? (
+            <AskView
+              context={{
+                datasetReleaseId: form.datasetReleaseId,
+                knownAt: form.knownAt === "" ? currentInstant() : form.knownAt,
+              }}
+              initialQuery={form.query}
+              onAsked={(query) => {
+                const next = { ...form, query };
+                setForm(next);
+                globalThis.history.replaceState(
+                  null,
+                  "",
+                  `${globalThis.location.pathname}${toSearchString(next)}`,
+                );
+              }}
+            />
+          ) : form.view === "kiem-chung" ? (
             <CitationCheckView
               context={{
                 datasetReleaseId: form.datasetReleaseId,

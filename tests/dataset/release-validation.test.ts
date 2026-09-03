@@ -61,6 +61,7 @@ function datasetWith(
     datasetReleaseId: syntheticReleaseId,
     provisionVersions: [...versions],
     amendments: [...amendments],
+    applicability: [],
   };
 }
 
