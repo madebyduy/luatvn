@@ -226,6 +226,12 @@ Kiểm lại bất cứ lúc nào bằng bài diễn tập chạy thật (dựng
 pnpm drill:portability
 ```
 
+## 4b2. Tham chiếu chéo trong nguyên văn (UX-110)
+
+Trên màn hình tra cứu, các cụm như `Điều 7 của Nghị định này`, `khoản 1 Điều 5 Luật …`, `Nghị định số 100/2019/NĐ-CP` được nhận ra tự động. Cụm nào **giải được** thành link mở đúng điều khoản **tại cùng ngày pháp lý đang đọc**. Cụm nào **chưa giải được** giữ nguyên chữ, gạch chấm, rê chuột thấy lý do: chưa có trong kho / không có bản hiệu lực tại ngày này / nhiều điều cùng khớp / chưa hỗ trợ. Hệ thống **không đoán đích**.
+
+Giới hạn hiện tại: Luật gọi theo **tên** ("Luật An ninh mạng") chưa giải được vì kho chỉ lưu số hiệu; tham chiếu tới **Chương** chưa hỗ trợ; tham chiếu bị **ngắt dòng** không thành link.
+
 ## 4c. Chạy MCP cho trợ lý AI (P-040)
 
 ```bash

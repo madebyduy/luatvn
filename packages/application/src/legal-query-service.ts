@@ -17,6 +17,8 @@ import {
   type ProvisionVersionId,
   type PublishedProvisionVersion,
   type ServablePublishedProvisionVersion,
+  type LegalReference,
+  extractLegalReferences,
   isServableReviewStatus,
 } from "@luatvn/domain";
 
@@ -58,6 +60,20 @@ interface LegalEnvelope<Data> {
   readonly untrustedContent: true;
 }
 
+export type ReferenceResolutionReason =
+  "NOT_IN_CORPUS" | "NOT_IN_FORCE_AT_DATE" | "AMBIGUOUS" | "UNSUPPORTED";
+
+// A cross-reference found in the text, resolved at the same legal date the
+// reader asked about. The reason names why a target is absent; nothing is
+// guessed to fill it.
+export interface ResolvedReference extends LegalReference {
+  readonly target: {
+    readonly provisionId: ProvisionId;
+    readonly provisionVersionId: ProvisionVersionId;
+  } | null;
+  readonly reason: ReferenceResolutionReason | null;
+}
+
 export type GetProvisionAtOutput = LegalEnvelope<
   | {
       readonly status: "resolved";
@@ -68,6 +84,7 @@ export type GetProvisionAtOutput = LegalEnvelope<
         readonly provisionVersionId: ProvisionVersionId;
       };
       readonly citation: LegalCitation;
+      readonly references: readonly ResolvedReference[];
     }
   | {
       readonly status: "unknown";
@@ -246,6 +263,111 @@ function primaryEvidenceFor(version: ServablePublishedProvisionVersion): Evidenc
   return primaryEvidence;
 }
 
+function compactDocumentNumber(value: string): string {
+  return value.normalize("NFC").replaceAll(/\s+/gu, "").toUpperCase();
+}
+
+function headingArticleNumber(heading: string | null): number | null {
+  const match = heading === null ? null : /^Điều\s+(\d+)\b/u.exec(heading.normalize("NFC"));
+  return match === null ? null : Number(match[1]);
+}
+
+// Resolves one reference to a provision version in force at validAt. Chapter
+// references have no provision to land on; titled laws cannot be matched
+// because the catalog carries document numbers, not titles. Both are reported
+// as such rather than approximated.
+function resolveOneReference(
+  reference: LegalReference,
+  current: PublishedProvisionVersion,
+  catalog: readonly PublishedProvisionVersion[],
+  validAt: LegalDate,
+  knownAt: IsoInstant,
+  datasetReleaseId: DatasetReleaseId,
+): ResolvedReference {
+  const unresolved = (reason: ReferenceResolutionReason): ResolvedReference => ({
+    ...reference,
+    reason,
+    target: null,
+  });
+
+  if (reference.chapter !== null) {
+    return unresolved("UNSUPPORTED");
+  }
+  if (reference.kind === "named_document") {
+    return unresolved("NOT_IN_CORPUS");
+  }
+
+  let scope: readonly PublishedProvisionVersion[];
+  if (reference.kind === "same_document") {
+    if (reference.article === null) {
+      // "khoản 2 Điều này": the provision being read.
+      return {
+        ...reference,
+        reason: null,
+        target: {
+          provisionId: current.provisionId,
+          provisionVersionId: current.provisionVersionId,
+        },
+      };
+    }
+    scope = catalog.filter((version) => version.documentId === current.documentId);
+  } else {
+    const wanted = compactDocumentNumber(reference.documentNumber ?? "");
+    scope = catalog.filter((version) => compactDocumentNumber(version.documentNumber) === wanted);
+    if (scope.length === 0) {
+      return unresolved("NOT_IN_CORPUS");
+    }
+    if (reference.article === null) {
+      return unresolved("UNSUPPORTED");
+    }
+  }
+
+  const candidates = scope.filter(
+    (version) => headingArticleNumber(version.heading) === reference.article,
+  );
+  const provisionIds = new Set(candidates.map((version) => version.provisionId));
+  if (provisionIds.size === 0) {
+    return unresolved("NOT_IN_CORPUS");
+  }
+  if (provisionIds.size > 1) {
+    return unresolved("AMBIGUOUS");
+  }
+  const [provisionId] = provisionIds;
+  if (provisionId === undefined) {
+    return unresolved("NOT_IN_CORPUS");
+  }
+  const resolved = resolveProvisionAt({
+    datasetReleaseId,
+    knownAt,
+    provisionId,
+    validAt,
+    versions: candidates,
+  });
+  if (resolved.status !== "resolved") {
+    return unresolved(resolved.status === "conflict" ? "AMBIGUOUS" : "NOT_IN_FORCE_AT_DATE");
+  }
+  return {
+    ...reference,
+    reason: null,
+    target: {
+      provisionId: resolved.version.provisionId,
+      provisionVersionId: resolved.version.provisionVersionId,
+    },
+  };
+}
+
+function resolveReferencesIn(
+  current: PublishedProvisionVersion,
+  catalog: readonly PublishedProvisionVersion[],
+  validAt: LegalDate,
+  knownAt: IsoInstant,
+  datasetReleaseId: DatasetReleaseId,
+): readonly ResolvedReference[] {
+  return extractLegalReferences(current.legalText).map((reference) =>
+    resolveOneReference(reference, current, catalog, validAt, knownAt, datasetReleaseId),
+  );
+}
+
 function citationFor(
   version: ServablePublishedProvisionVersion,
   validAt: LegalDate,
@@ -335,6 +457,21 @@ export class LegalQueryService {
       );
     }
 
+    // Cross-references are resolved against the catalog at the same legal
+    // date, so "Điều 7 của Nghị định này" read on a 2023 date links to the
+    // 2023 text of Điều 7, not today's. The catalog read is bounded.
+    const catalog = await executeLegalRead(operation, () =>
+      this.repository.listCatalogVersions(context.datasetReleaseId, operation),
+    );
+    assertResultLimit("Catalog versions", catalog.length, maximumCatalogVersions);
+    const references = resolveReferencesIn(
+      resolution.version,
+      catalog,
+      validAt,
+      context.knownAt,
+      context.datasetReleaseId,
+    );
+
     return envelope(
       {
         status: "resolved",
@@ -345,6 +482,7 @@ export class LegalQueryService {
           provisionVersionId: resolution.version.provisionVersionId,
         },
         citation: citationFor(resolution.version, validAt, context.knownAt),
+        references,
       },
       context.datasetReleaseId,
     );

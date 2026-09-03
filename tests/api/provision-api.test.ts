@@ -37,6 +37,10 @@ describe("provision REST contract", () => {
     });
 
     expect(response.statusCode).toBe(200);
+    // Cross-references travel with every resolved answer, possibly empty.
+    expect(
+      Array.isArray((response.json() as { data: { references: unknown } }).data.references),
+    ).toBe(true);
     expect(response.json()).toMatchObject({
       data: {
         status: "resolved",

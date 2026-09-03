@@ -71,6 +71,7 @@ const resolvedBody = envelope({
     provisionId,
     provisionVersionId: versionOne,
   },
+  references: [],
   status: "resolved",
 });
 

@@ -1,4 +1,7 @@
+import type React from "react";
+
 import type { ProvisionAtResponse } from "../api.js";
+import { emptyState, toSearchString } from "../url-state.js";
 
 const unknownReasonText: Record<string, string> = {
   MATCH_ONLY_UNVERIFIED: "Có bản ghi khớp thời điểm nhưng chưa được người kiểm tra xác nhận.",
@@ -73,10 +76,89 @@ export function ProvisionResult({ response }: { readonly response: ProvisionAtRe
         Đây không phải tư vấn pháp lý.
       </p>
       <div className="legal-text">
-        {data.provision.legalText.split("\n").map((line, index) => (
-          <p key={`${String(index)}-${line.slice(0, 12)}`}>{line}</p>
-        ))}
+        {renderLinesWithReferences(data.provision.legalText, data.references, {
+          datasetReleaseId: data.citation.datasetReleaseId,
+          validAt: data.citation.validAt,
+        })}
       </div>
     </article>
   );
+}
+
+type ReferenceOfResponse = Extract<
+  ProvisionAtResponse["data"],
+  { status: "resolved" }
+>["references"][number];
+
+const unresolvedReasonText: Record<string, string> = {
+  AMBIGUOUS: "Nhiều điều khoản cùng khớp; chưa xác định được đích",
+  NOT_IN_CORPUS: "Văn bản được dẫn chưa có trong kho",
+  NOT_IN_FORCE_AT_DATE: "Điều được dẫn không có phiên bản hiệu lực tại ngày này",
+  UNSUPPORTED: "Chưa hỗ trợ dẫn tới loại tham chiếu này",
+};
+
+// Every recognised cross-reference becomes a link to the referenced article as
+// it stood on the same legal date - the text reads like a web page instead of a
+// scan. A reference the corpus cannot satisfy stays plain text with the reason
+// on hover; it is never linked to a guess. References that wrap across a line
+// break are left as text.
+function renderLinesWithReferences(
+  legalText: string,
+  references: readonly ReferenceOfResponse[],
+  context: { readonly datasetReleaseId: string; readonly validAt: string },
+) {
+  const lines = legalText.split("\n");
+  let offset = 0;
+  return lines.map((line, index) => {
+    const lineStart = offset;
+    const lineEnd = offset + line.length;
+    offset = lineEnd + 1;
+    const inLine = references
+      .filter((reference) => reference.start >= lineStart && reference.end <= lineEnd)
+      .toSorted((left, right) => left.start - right.start);
+    if (inLine.length === 0) {
+      return <p key={`${String(index)}-${line.slice(0, 12)}`}>{line}</p>;
+    }
+    const parts: React.ReactNode[] = [];
+    let cursor = lineStart;
+    for (const reference of inLine) {
+      if (reference.start > cursor) {
+        parts.push(legalText.slice(cursor, reference.start));
+      }
+      const label = legalText.slice(reference.start, reference.end);
+      if (reference.target !== null) {
+        parts.push(
+          <a
+            className="ref-link"
+            href={toSearchString({
+              ...emptyState,
+              datasetReleaseId: context.datasetReleaseId,
+              provisionId: reference.target.provisionId,
+              validAt: context.validAt,
+              view: "tra-cuu",
+            })}
+            key={`${String(reference.start)}-${reference.target.provisionVersionId}`}
+            title={`Mở ${label} tại ngày ${context.validAt}`}
+          >
+            {label}
+          </a>,
+        );
+      } else {
+        parts.push(
+          <span
+            className="ref-unresolved"
+            key={`${String(reference.start)}-unresolved`}
+            title={unresolvedReasonText[reference.reason ?? ""] ?? "Chưa giải được tham chiếu"}
+          >
+            {label}
+          </span>,
+        );
+      }
+      cursor = reference.end;
+    }
+    if (cursor < lineEnd) {
+      parts.push(legalText.slice(cursor, lineEnd));
+    }
+    return <p key={`${String(index)}-${line.slice(0, 12)}`}>{parts}</p>;
+  });
 }

@@ -164,6 +164,35 @@ const ConflictedProvisionDataSchema = z
   })
   .strict();
 
+// A cross-reference found inside the legal text, resolved at the same legal
+// date the reader asked about. "target" is null when the corpus has no such
+// document or article; "reason" says which. Never guessed.
+export const ResolvedReferenceSchema = z
+  .object({
+    article: z.number().int().positive().nullable(),
+    chapter: z.string().max(16).nullable(),
+    clause: z.number().int().positive().nullable(),
+    documentNumber: z.string().max(256).nullable(),
+    documentTitle: z.string().max(512).nullable(),
+    documentType: z.string().max(64).nullable(),
+    end: z.number().int().nonnegative(),
+    kind: z.enum(["same_document", "named_document", "numbered_document"]),
+    point: z.string().max(4).nullable(),
+    reason: z
+      .enum(["NOT_IN_CORPUS", "NOT_IN_FORCE_AT_DATE", "AMBIGUOUS", "UNSUPPORTED"])
+      .nullable(),
+    start: z.number().int().nonnegative(),
+    target: z
+      .object({
+        provisionId: ProvisionIdSchema,
+        provisionVersionId: ProvisionVersionIdSchema,
+      })
+      .strict()
+      .nullable(),
+    text: z.string().min(1).max(512),
+  })
+  .strict();
+
 const ResolvedProvisionDataSchema = z
   .object({
     citation: CitationSchema,
@@ -175,6 +204,7 @@ const ResolvedProvisionDataSchema = z
         provisionVersionId: ProvisionVersionIdSchema,
       })
       .strict(),
+    references: z.array(ResolvedReferenceSchema).max(512).readonly(),
     status: z.literal("resolved"),
   })
   .strict();

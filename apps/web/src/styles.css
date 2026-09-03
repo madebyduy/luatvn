@@ -502,6 +502,25 @@ button[type="submit"] {
   color: var(--ok);
 }
 
+/* Cross-references inside legal text. A resolved one is a real link and looks
+   like one; an unresolved one is dotted so the reader knows it was recognised
+   but has nowhere to go yet - and hover says why. */
+.ref-link {
+  border-bottom: 1px solid var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.ref-link:hover,
+.ref-link:focus-visible {
+  background: var(--surface);
+}
+
+.ref-unresolved {
+  border-bottom: 1px dotted var(--muted);
+  cursor: help;
+}
+
 /* Servable like verified, so the same green family - but dashed, because no
    person has looked yet. Visibly different from both neighbours on purpose. */
 .chip-machine_checked {
