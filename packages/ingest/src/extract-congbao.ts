@@ -58,11 +58,21 @@ const sectionPattern = /^Mục\s+\d+(?:\s+[^\p{Ll}]+)?$/u;
  * heading opens an annex.
  */
 const annexStartPatterns = [
-  /^CỘNG\s+HÒA\s+XÃ\s+HỘI\s+CHỦ\s+NGHĨA\s+VIỆT\s+NAM$/u,
-  /^PHỤ\s+LỤC(?:\s+[IVXLCDM\d]+[A-Za-zĐ]?)?\s*$/iu,
+  // Not anchored to the whole line. The gazette lays the issuing body and the
+  // national heading in two columns, which the PDF flattens into one line:
+  // "BỘ CÔNG AN CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM". An anchored pattern misses
+  // that, and 128/2026/TT-BCA was refused outright because its annex - a set of
+  // facility rules with its own Điều 1 to Điều 4 - restarted the article
+  // numbering. Relaxing this is safe only because of the refusal guard below:
+  // if articles continue past the marker, no cut is made.
+  /CỘNG[ ]+HÒA[ ]+XÃ[ ]+HỘI[ ]+CHỦ[ ]+NGHĨA[ ]+VIỆT[ ]+NAM/u,
+  /^PHỤ[ ]+LỤC(?:[ ]+[IVXLCDM0-9]+[A-Za-zĐ]?)?[ ]*$/iu,
   // A form schedule opens by naming itself and the document that issued it:
   // "Mẫu CC01 ban hành kèm theo Thông tư số 118/2026/TT-BCA".
-  /^Mẫu\s+\S+\s+(?:ban\s+hành\s+)?kèm\s+theo\s+/iu,
+  /^Mẫu[ ]+[^ ]+[ ]+(?:ban[ ]+hành[ ]+)?kèm[ ]+theo[ ]+/iu,
+  // And an annex that carries neither says so on its own line, in brackets:
+  // "(Ban hành kèm theo Thông tư số 128/2026/TT-BCA)".
+  /^[(][ ]*(?:Ban[ ]+hành[ ]+)?[Kk]èm[ ]+theo[ ]+/u,
 ];
 
 /**

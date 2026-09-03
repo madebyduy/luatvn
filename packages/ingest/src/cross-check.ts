@@ -56,8 +56,18 @@ function compact(text: string): string {
   return text.normalize("NFC").replaceAll(/\s+/gu, "").toUpperCase();
 }
 
+/**
+ * Two spellings occur and both are ordinary drafting: "ngày 19 tháng 8 năm
+ * 2026" in a signing line, "kể từ ngày 01/07/2026" in an effective-date
+ * clause. Reading only the first reported the second as "no readable date",
+ * which sent documents to a human reviewer over a date written plainly on the
+ * page. Both forms require the word "ngày", so a pair of numbers elsewhere in
+ * the sentence cannot be mistaken for a date.
+ */
 function isoFromVietnameseDate(text: string): string | null {
-  const match = /ngày\s+(\d{1,2})\s+tháng\s+(\d{1,2})\s+năm\s+(\d{4})/iu.exec(text);
+  const match =
+    /ngày[ ]+([0-9]{1,2})[ ]+tháng[ ]+([0-9]{1,2})[ ]+năm[ ]+([0-9]{4})/iu.exec(text) ??
+    /ngày[ ]+([0-9]{1,2})[/-]([0-9]{1,2})[/-]([0-9]{4})/iu.exec(text);
   if (match === null) {
     return null;
   }
@@ -111,34 +121,41 @@ function checkIssueDate(input: CrossCheckInput): CrossCheckResult {
 function checkEffectiveDate(input: CrossCheckInput): CrossCheckResult {
   const sentences = input.draft.provisionVersions
     .map((version) => version.legalText)
-    .join("\n")
-    .split(/\n/u);
-  const effectiveLine = sentences.find((line) => /có hiệu lực/iu.test(line));
-  if (effectiveLine === undefined) {
+    .join(String.fromCharCode(10))
+    .split(String.fromCharCode(10));
+  // Every line carrying the phrase, not the first one. "có hiệu lực" is
+  // ordinary Vietnamese and appears in body text - "quyết định giải quyết đã
+  // có hiệu lực pháp luật" - so taking the first match read a sentence about
+  // something else, found no date in it, and reported the document as having
+  // no readable effective date while the real clause sat further down.
+  const candidates = sentences.filter((line) => /có hiệu lực/iu.test(line));
+  if (candidates.length === 0) {
     return {
       check: "EFFECTIVE_DATE",
       detail: "văn bản không có câu 'có hiệu lực …' để đối soát",
       status: "not_available",
     };
   }
-  // Two forms occur: an explicit date, or "kể từ ngày ký" - in which case the
-  // effective date the gazette states must equal the issue date it states.
-  const explicit = isoFromVietnameseDate(effectiveLine);
-  if (explicit !== null) {
-    if (explicit === input.reference.effectiveFrom) {
+  const dated = candidates
+    .map((line) => ({ date: isoFromVietnameseDate(line), line }))
+    .filter((entry) => entry.date !== null);
+  if (dated.length > 0) {
+    const agreeing = dated.find((entry) => entry.date === input.reference.effectiveFrom);
+    if (agreeing !== undefined) {
       return {
         check: "EFFECTIVE_DATE",
-        detail: `trang và Điều hiệu lực cùng ghi ${explicit}`,
+        detail: `trang và Điều hiệu lực cùng ghi ${input.reference.effectiveFrom}`,
         status: "pass",
       };
     }
+    const found = [...new Set(dated.map((entry) => String(entry.date)))].join(", ");
     return {
       check: "EFFECTIVE_DATE",
-      detail: `trang Công báo ghi hiệu lực ${input.reference.effectiveFrom}, văn bản ghi ${explicit}`,
+      detail: `trang Công báo ghi hiệu lực ${input.reference.effectiveFrom}, văn bản ghi ${found}`,
       status: "flag",
     };
   }
-  if (/ngày ký/iu.test(effectiveLine)) {
+  if (candidates.some((line) => /ngày ký/iu.test(line))) {
     if (input.reference.effectiveFrom === input.reference.issuedOn) {
       return {
         check: "EFFECTIVE_DATE",
@@ -154,7 +171,7 @@ function checkEffectiveDate(input: CrossCheckInput): CrossCheckResult {
   }
   return {
     check: "EFFECTIVE_DATE",
-    detail: `câu hiệu lực không nêu ngày đọc được: "${effectiveLine.slice(0, 80)}"`,
+    detail: `${String(candidates.length)} câu có cụm 'có hiệu lực' nhưng không câu nào nêu ngày: "${String(candidates[0]).slice(0, 70)}"`,
     status: "not_available",
   };
 }
@@ -175,7 +192,12 @@ function checkNumbering(input: CrossCheckInput): {
     let expectedPoint = 0;
     let broken = false;
     for (const line of lines) {
-      const clause = /^(\d+)\.\s/u.exec(line);
+      // The space after the number is not guaranteed. 131/2026/TT-BCA prints
+      // "2.Xử lý sự cố về an ninh mạng" with none, so a pattern requiring one
+      // skipped clause 2 and reported the article as jumping from 1 to 3 - a
+      // typography detail read as a defect in the law. The lookahead keeps
+      // "2.1." out: that is a sub-heading inside an annex, not a clause.
+      const clause = /^([0-9]+)[.](?![0-9])[ ]*/u.exec(line);
       if (clause !== null) {
         const number = Number(clause[1]);
         if (number !== expectedClause) {
@@ -188,7 +210,7 @@ function checkNumbering(input: CrossCheckInput): {
         expectedPoint = 0;
         continue;
       }
-      const point = /^([a-zđ])\)\s/u.exec(line);
+      const point = /^([a-zđ])[)][ ]*/u.exec(line);
       if (point !== null) {
         const letter = point[1] ?? "";
         const index = pointLetters.indexOf(letter);

@@ -48,6 +48,13 @@ không ai đếm.
   phạm bắt buộc, không phải phụ chú. Người hỏi "hồ sơ gồm mẫu nào" sẽ không được
   trả lời. Bytes vẫn còn trong PDF đã lưu trữ và tải được qua `/v1/sources/`,
   nhưng máy không tra cứu được.
+- Trường hợp rõ nhất là Thông tư 128/2026/TT-BCA. Phần đính kèm của nó là
+  **"NỘI QUY CƠ SỞ LƯU TRÚ", có Điều 1 đến Điều 4**, quy định trực tiếp nghĩa vụ
+  của người lưu trú và hành vi bị cấm. Nó chính là phần mà người bị điều chỉnh
+  cần đọc nhất, và nó đang nằm ngoài kho. Bốn Điều của Thông tư mẹ chỉ nói
+  "ban hành kèm theo", "phạm vi", "hiệu lực", "trách nhiệm thi hành".
+  Nói cách khác: cắt phụ lục làm nguyên văn Điều trở nên **đúng**, nhưng làm kho
+  trở nên **thiếu**, và với loại văn bản này thì phần thiếu mới là phần có ích.
 - Việc mở phục vụ phụ lục cần một mô hình địa chỉ khác Điều/Khoản/Điểm, và cần
   chủ dự án quyết định trước - **đây là quyết định về dữ liệu pháp lý, không
   phải quyết định kỹ thuật.**

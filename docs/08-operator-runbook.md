@@ -53,8 +53,35 @@ tự đăng ký):
 schtasks /create /tn "LuatVN crawl" /tr "cmd /c cd /d C:UsersThu HaDesktopphapluatvn && node toolscrawl-daemon.mjs --seeds-file tmpseeds.txt --release rel_next --rounds 12 --max 40 --backup-to D:LuatVN-backup" /sc daily /st 02:00
 ```
 
-Seed là các trang liệt kê theo bộ ngành (`/van-ban-dang-cong-bao/...`), mỗi
-trang khoảng 30 văn bản. Trang chủ Công báo chỉ cho 10 link nên không đủ dùng.
+Seed dựng từ chính chỉ mục của Công báo (`/van-ban-dang-cong-bao.htm`): 43
+trang, gồm mọi cơ quan ban hành (`-cNN`) cộng các loại văn bản có cấu trúc Điều
+(`-lNN`). Bỏ 35 trang loại không có Điều (công điện, giấy mời, phiếu gửi) để
+không tốn request chỉ để bị từ chối. Mỗi trang hiện **30 văn bản mới nhất và
+không phân trang**, nên trần của cách này khoảng 290 URL.
+
+### Bóc lại khi bộ bóc khá lên
+
+```bash
+node tools/crawl-daemon.mjs --seeds-file tmp/seeds.txt --release rel_xxx --retry-unclean
+```
+
+Một cải tiến bộ bóc chỉ đáng giá bằng số văn bản được áp dụng lại. Văn bản bị từ
+chối hay bị gắn cờ tuần trước là bị **code tuần trước** phán, và sổ chỉ nhớ rằng
+đã gặp nó, nên không có cờ này thì nó bị phán như vậy mãi mãi. `--retry-unclean`
+xoá khỏi sổ đúng những mục **chưa sạch**, giữ nguyên mục đã sạch, rồi cào lại.
+
+### Trần hiện tại và đường đi tiếp
+
+Kho lịch sử nằm sau trang `/cong-bao.htm`: mỗi số Công báo là một trang liệt kê
+khoảng 10 văn bản, và điều hướng theo năm/tháng bằng hai `select`
+(`dllselectyear`, `dllselectmonth`, giá trị dạng `2026-09`). Chưa biết select
+đó gọi URL nào - **chưa dò ra, không đoán**. Tìm được là mở từ ~290 văn bản lên
+cỡ vài nghìn mỗi năm. Lưu ý link văn bản trên trang số Công báo có dạng
+`/van-ban/<slug>-<id>/<n>.htm` (thừa một đoạn) khác với trang liệt kê thường.
+
+Ngoài ra mỗi số Công báo có một PDF trọn số tải được từ CDN. Đó là **một file
+chứa nhiều văn bản**, bộ bóc hiện tại giả định một file một văn bản, nên dùng
+đường đó cần một bộ tách theo văn bản trước đã.
 
 ## 2c. Cộng dồn - bản phát hành là toàn bộ kho, không phải phần mới
 

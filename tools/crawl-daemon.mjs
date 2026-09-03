@@ -11,9 +11,10 @@
 //
 //   node tools/crawl-daemon.mjs --seeds-file tmp/seeds.txt --release rel_003
 //     [--rounds 12] [--max 40] [--state <file>] [--backup-to <dir>]
+//     [--retry-unclean]
 
 import { spawn } from "node:child_process";
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 function readFlags(argv) {
@@ -82,6 +83,33 @@ async function main() {
   await note(
     `\n=== ${stamp()} bắt đầu, ${String(seeds.length)} seed, tối đa ${String(rounds)} lượt ===`,
   );
+
+  // The extractor keeps improving, and every improvement is worth exactly as
+  // much as the documents it can be applied to. A document refused or flagged
+  // last week was judged by last week's code; without this it stays judged that
+  // way forever, because the ledger only remembers that it was seen. Clearing
+  // the entries that did not come out clean puts them back in the queue while
+  // leaving the clean ones alone, so a re-run costs only what it has to.
+  if (flags.get("retry-unclean") === "true") {
+    let state = null;
+    try {
+      state = JSON.parse(await readFile(statePath, "utf8"));
+    } catch {
+      state = null;
+    }
+    if (state?.documents !== undefined) {
+      const before = Object.keys(state.documents).length;
+      const kept = {};
+      for (const [url, entry] of Object.entries(state.documents)) {
+        if (entry?.status === "ingested") kept[url] = entry;
+      }
+      state.documents = kept;
+      await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+      await note(
+        `${stamp()} xoá ${String(before - Object.keys(kept).length)} mục chưa sạch khỏi sổ để bóc lại; giữ ${String(Object.keys(kept).length)} mục đã sạch`,
+      );
+    }
+  }
 
   let totalFetched = 0;
   let quietRounds = 0;

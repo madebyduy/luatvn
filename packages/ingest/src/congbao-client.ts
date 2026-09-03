@@ -80,7 +80,7 @@ export function readCongBaoDetailPage(html: string): CongBaoDocumentReference {
 
   const text = plainText(html);
   const numbered =
-    /(?<kind>Nghị định|Thông tư|Quyết định|Luật|Nghị quyết|Pháp lệnh|Văn bản hợp nhất)\s+số\s+(?<number>[0-9A-Za-zĐÐ/.-]+)/u.exec(
+    /(?<kind>Nghị định|Thông tư liên tịch|Thông tư liên bộ|Thông tư|Nghị quyết liên tịch|Nghị quyết|Quyết định|Hiến pháp|Luật|Pháp lệnh|Văn bản hợp nhất)\s+số\s+(?<number>[0-9A-Za-zĐÐ/.-]+)/u.exec(
       text,
     );
   if (numbered?.groups === undefined) {
@@ -136,3 +136,9 @@ export function readCongBaoDetailPage(html: string): CongBaoDocumentReference {
     title: title === "" ? `${numbered.groups["kind"] ?? "Văn bản"} số ${documentNumber}` : title,
   };
 }
+
+// The alternation above is ordered longest-first on purpose. "Thông tư liên
+// tịch số 12/2026/TTLT-BCA-BQP" is a normative document with a full Điều
+// structure, but a pattern that tries "Thông tư" first matches that prefix,
+// then fails to find "số" immediately after it, and the document is reported as
+// an unsupported type. Six such documents were refused in one crawl of 25.

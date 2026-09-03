@@ -178,3 +178,120 @@ describe("cross-checking a gazette document against its own page and body", () =
     expect(statusOf(report, "CHARACTER_BALANCE")).toBe("pass");
   });
 });
+
+describe("the two ways a Vietnamese date is written", () => {
+  const slashForm: TextLine[] = [
+    line("CHÍNH PHỦ"),
+    line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+    line("Điều 1. Phạm vi"),
+    line("Nội dung của Điều 1."),
+    line("Điều 2. Hiệu lực thi hành"),
+    line("Nghị định này có hiệu lực thi hành kể từ ngày 15/01/2026."),
+  ];
+
+  // The date is written plainly on the page; reporting "no readable date" sent
+  // the document to a human reviewer over a formatting difference.
+  it("reads an effective date written as ngày dd/mm/yyyy", () => {
+    expect(statusOf(run(slashForm), "EFFECTIVE_DATE")).toBe("pass");
+  });
+
+  it("still disagrees with the gazette when the slash date differs", () => {
+    expect(
+      statusOf(run(slashForm, { ...reference, effectiveFrom: "2026-02-01" }), "EFFECTIVE_DATE"),
+    ).toBe("flag");
+  });
+
+  it("does not read a bare pair of numbers as a date", () => {
+    const noDate = slashForm.with(
+      5,
+      line("Nghị định này có hiệu lực thi hành theo Điều 15/2026 của Luật A."),
+    );
+    expect(statusOf(run(noDate), "EFFECTIVE_DATE")).toBe("not_available");
+  });
+});
+
+describe("finding the effective-date clause among sentences that merely mention it", () => {
+  // "có hiệu lực" is ordinary Vietnamese. Taking the first line that contains it
+  // read a sentence about the legal force of someone else's decision, found no
+  // date, and reported a document whose date was stated plainly as unreadable.
+  const buried: TextLine[] = [
+    line("CHÍNH PHỦ"),
+    line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+    line("Điều 1. Phạm vi"),
+    line("Áp dụng với kết luận, quyết định giải quyết đã có hiệu lực pháp luật."),
+    line("Điều 2. Hiệu lực thi hành"),
+    line("Nghị định này có hiệu lực thi hành kể từ ngày 15 tháng 01 năm 2026."),
+  ];
+
+  it("reads the clause that carries a date, not the first mention", () => {
+    expect(statusOf(run(buried), "EFFECTIVE_DATE")).toBe("pass");
+  });
+
+  it("flags when no candidate line agrees with the gazette", () => {
+    const report = run(buried, { ...reference, effectiveFrom: "2026-03-01" });
+    expect(statusOf(report, "EFFECTIVE_DATE")).toBe("flag");
+    expect(report.results.find((r) => r.check === "EFFECTIVE_DATE")?.detail).toContain(
+      "2026-01-15",
+    );
+  });
+
+  it("says how many candidates it read when none carries a date", () => {
+    const noDate: TextLine[] = [
+      line("CHÍNH PHỦ"),
+      line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+      line("Điều 1. Phạm vi"),
+      line("Áp dụng với quyết định đã có hiệu lực pháp luật."),
+      line("Điều 2. Thi hành"),
+      line("Bản án đã có hiệu lực được thi hành theo quy định."),
+    ];
+    const report = run(noDate);
+    expect(statusOf(report, "EFFECTIVE_DATE")).toBe("not_available");
+    expect(report.results.find((r) => r.check === "EFFECTIVE_DATE")?.detail).toContain("2 câu");
+  });
+});
+
+describe("clause numbering as the PDF prints it", () => {
+  // A missing space after the number is typography, not a defect in the law.
+  // Requiring one made the check skip the clause and report the article as
+  // jumping from 1 to 3, which sent twenty-three good articles to a reviewer.
+  it("counts a clause written without a space after its number", () => {
+    const tight: TextLine[] = [
+      line("CHÍNH PHỦ"),
+      line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+      line("Điều 1. Xử lý sự cố"),
+      line("1. Khoản thứ nhất."),
+      line("2.Khoản thứ hai viết sát số."),
+      line("3. Khoản thứ ba."),
+      line("Điều 2. Hiệu lực thi hành"),
+      line("Nghị định này có hiệu lực thi hành kể từ ngày 15 tháng 01 năm 2026."),
+    ];
+    expect(statusOf(run(tight), "NUMBERING")).toBe("pass");
+  });
+
+  it("still reports a clause that is actually missing", () => {
+    const gap: TextLine[] = [
+      line("CHÍNH PHỦ"),
+      line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+      line("Điều 1. Xử lý sự cố"),
+      line("1. Khoản thứ nhất."),
+      line("3. Khoản thứ ba, khoản 2 biến mất."),
+      line("Điều 2. Hiệu lực thi hành"),
+      line("Nghị định này có hiệu lực thi hành kể từ ngày 15 tháng 01 năm 2026."),
+    ];
+    expect(statusOf(run(gap), "NUMBERING")).toBe("flag");
+  });
+
+  it("does not read a sub-heading like 2.1 as a clause", () => {
+    const nested: TextLine[] = [
+      line("CHÍNH PHỦ"),
+      line("Số: 01/2026/NĐ-TEST Hà Nội, ngày 01 tháng 01 năm 2026"),
+      line("Điều 1. Xử lý sự cố"),
+      line("1. Khoản thứ nhất."),
+      line("1.1. Mục con của khoản thứ nhất."),
+      line("2. Khoản thứ hai."),
+      line("Điều 2. Hiệu lực thi hành"),
+      line("Nghị định này có hiệu lực thi hành kể từ ngày 15 tháng 01 năm 2026."),
+    ];
+    expect(statusOf(run(nested), "NUMBERING")).toBe("pass");
+  });
+});

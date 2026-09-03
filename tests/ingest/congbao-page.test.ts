@@ -66,3 +66,43 @@ describe("reading a Công báo detail page", () => {
     }
   });
 });
+
+describe("document types whose name contains another type's name", () => {
+  // "Thông tư liên tịch" is a normative document with a full Điều structure.
+  // A pattern that tried "Thông tư" first matched that prefix, found no "số"
+  // after it, and reported the whole document as an unsupported type; six were
+  // turned away in a single crawl of twenty-five.
+  it("reads a joint circular rather than calling it an unsupported type", () => {
+    const page = detailPage({}).replace(
+      "Nghị định số 327/2026/NĐ-CP quy định về phòng ngừa",
+      "Thông tư liên tịch số 12/2026/TTLT-BCA-BQP quy định về phối hợp",
+    );
+    const reference = readCongBaoDetailPage(page);
+    expect(reference.documentNumber).toBe("12/2026/TTLT-BCA-BQP");
+  });
+
+  it("still reads a plain circular", () => {
+    const page = detailPage({}).replace(
+      "Nghị định số 327/2026/NĐ-CP quy định về phòng ngừa",
+      "Thông tư số 41/2026/TT-BCT quy định về tạm ngừng",
+    );
+    expect(readCongBaoDetailPage(page).documentNumber).toBe("41/2026/TT-BCT");
+  });
+
+  it("names the type it found when the type has no Điều structure", () => {
+    const page = detailPage({}).replace(
+      "Nghị định số 327/2026/NĐ-CP quy định về phòng ngừa",
+      "Công điện số 15/CĐ-TTg về ứng phó",
+    );
+    const error = (() => {
+      try {
+        readCongBaoDetailPage(page);
+        return null;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+    expect(error).toBeInstanceOf(CongBaoPageError);
+    expect((error as CongBaoPageError).code).toBe("UNSUPPORTED_DOCUMENT_TYPE");
+  });
+});

@@ -290,3 +290,56 @@ describe("annex markers as they are actually printed", () => {
     expect(draft.provisionVersions[0]?.legalText).toContain("Phụ lục I");
   });
 });
+
+describe("annexes that carry their own Điều numbering", () => {
+  // 128/2026/TT-BCA was refused outright: its annex, a set of facility rules,
+  // restarts at Điều 1, so the article sequence read 1,2,3,4,1,2,3,4. The
+  // marker was there but the PDF had flattened two columns into one line.
+  it("cuts on a national heading that shares a line with the issuing body", () => {
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Phạm vi"),
+        line("Nội dung của Điều 1."),
+        line("Điều 2. Trách nhiệm thi hành"),
+        line("Chịu trách nhiệm thi hành Thông tư này./."),
+        line("BỘ TRƯỞNG", { x: 400 }),
+        line("Người ký thử nghiệm", { x: 400 }),
+        line("BỘ THỬ NGHIỆM CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"),
+        line("NỘI QUY THỬ NGHIỆM"),
+        line("Điều 1. Quy định đối với người lưu trú"),
+        line("Nội dung nội quy."),
+      ]),
+    );
+    expect(draft.provisionVersions).toHaveLength(2);
+    expect(report.annexLines.at(0)?.text).toContain("CỘNG HÒA");
+    expect(report.annexLines).toHaveLength(4);
+  });
+
+  it("cuts on a bracketed line naming the document that issued the annex", () => {
+    const { report } = draftOf(
+      documentOf([
+        line("Điều 1. Điều khoản thi hành"),
+        line("Có hiệu lực thi hành./."),
+        line("(Ban hành kèm theo Thông tư số 01/2026/NĐ-TEST)"),
+        line("BẢNG GIÁ"),
+      ]),
+    );
+    expect(report.annexLines).toHaveLength(2);
+  });
+
+  // The relaxed marker is only safe because of this: a marker that is followed
+  // by the next article in sequence is not an annex, and no cut is made.
+  it("still refuses the cut when the numbering continues past the marker", () => {
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Phạm vi"),
+        line("Biểu mẫu in tiêu đề CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM ở đầu trang."),
+        line("Điều 2. Đối tượng"),
+        line("Nội dung của Điều 2."),
+      ]),
+    );
+    expect(draft.provisionVersions).toHaveLength(2);
+    expect(report.annexLines).toEqual([]);
+    expect(report.annexCutRefused).toContain("CỘNG HÒA");
+  });
+});
