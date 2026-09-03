@@ -29,6 +29,55 @@ pnpm dataset validate data/manual/staging-rel-xxx.json
 
 Lệnh in báo cáo lỗi theo từng record (locator + lý do). Chỉ tiếp tục khi in `validation passed`.
 
+## 2b. Cào tự động - chạy nhiều lượt không cần ngồi canh
+
+Một lượt `congbao-batch` chỉ lấy tối đa `--max` văn bản rồi dừng. Xây được kho
+thì phải chạy rất nhiều lượt, nên có script chạy hộ:
+
+```bash
+node tools/crawl-daemon.mjs --seeds-file tmp/seeds.txt --release rel_xxx --rounds 12 --max 40 --backup-to D:/LuatVN-backup
+```
+
+- Chạy lượt này nối lượt kia, **tự dừng** khi một lượt không lấy được gì mới,
+  không gắn cờ gì và không từ chối gì - nghĩa là các seed hiện có đã cào hết.
+- Ghi nhật ký vào `data/manual/crawl-log/<ngày>.log`.
+- Dùng chung một sổ `data/manual/crawl-state.json` cho mọi release, nên đổi
+  `--release` không làm nó tải lại thứ đã có.
+- Ngắt giữa chừng vô hại: mất nhiều nhất là văn bản đang tải dở.
+- Có `--backup-to` thì sao lưu ngay sau khi cào xong.
+
+Chạy định kỳ trên Windows (đăng ký tác vụ này là việc của chủ máy, script không
+tự đăng ký):
+
+```bash
+schtasks /create /tn "LuatVN crawl" /tr "cmd /c cd /d C:UsersThu HaDesktopphapluatvn && node toolscrawl-daemon.mjs --seeds-file tmpseeds.txt --release rel_next --rounds 12 --max 40 --backup-to D:LuatVN-backup" /sc daily /st 02:00
+```
+
+Seed là các trang liệt kê theo bộ ngành (`/van-ban-dang-cong-bao/...`), mỗi
+trang khoảng 30 văn bản. Trang chủ Công báo chỉ cho 10 link nên không đủ dùng.
+
+## 2c. Cộng dồn - bản phát hành là toàn bộ kho, không phải phần mới
+
+**Đây là chỗ dễ sai nhất và sai thì không kêu.** Một release là ảnh chụp toàn bộ
+kho mà máy chủ trả lời từ đó, không phải nhật ký thay đổi. Publish thẳng file
+staging của lượt cào mới nhất thì release đó chỉ có mấy chục văn bản vừa cào, và
+**mọi văn bản cào trước đó ngừng được phục vụ** - dữ liệu vẫn nằm trong thư mục
+release cũ, nhưng không ai đọc nữa. Lệnh vẫn báo publish thành công, verify vẫn
+báo chain intact, chỉ có kho là teo lại.
+
+Nên sau mỗi phiên cào:
+
+```bash
+pnpm dataset cumulate data/manual/staging-rel-mới.json --release rel_kế_tiếp
+pnpm dataset publish  data/manual/staging-rel-kế-tiếp.json --reviewed-by "Ho ten (publisher)"
+pnpm dataset verify
+```
+
+`cumulate` lấy release đang phục vụ cộng với staging mới, đóng lại cùng một
+release id, gộp theo id bản ghi (**bản bóc mới thắng**, vì lý do bóc lại là để
+sửa chỗ bóc sai), và gộp cả nhật ký duyệt để không bản ghi nào mất mục bảo chứng
+của nó. Không có `--from` thì nó lấy release đang phục vụ.
+
 ## 3. Publish - phát hành release bất biến
 
 ```bash
@@ -257,7 +306,14 @@ Xong một đợt thì `validate` → `publish` file sạch như mục 2-3, và 
 pnpm dataset backup --to <ổ-cứng-ngoài>/luatvn-archive
 ```
 
-Kho `data/manual/archive/` là **phần duy nhất git không mang theo**. Bản phát hành thì an toàn vì nằm trong git, nhưng mất đĩa là mất kho, và mất kho thì không ai dựng lại được nguyên văn từ nguồn nữa.
+Lệnh sao lưu **hai** thứ, không phải một:
+
+1. `data/manual/archive/` - kho bằng chứng của các bản đã phát hành. Git không mang theo, nên mất đĩa là không ai dựng lại được nguyên văn từ nguồn nữa.
+2. `working/` ở đích - phần **đang làm dở**: file nguồn đã tải trong `data/manual/sources/`, các file staging, và sổ `crawl-state.json`. Cả ba đều bị gitignore.
+
+Phần thứ hai mới là phần dễ mất nhất. Nguyên văn đã phát hành nằm trong git nên có bao nhiêu bản clone là có bấy nhiêu bản sao; còn thứ vừa cào mà chưa phát hành thì **chỉ tồn tại đúng một chỗ trên đúng một đĩa**. Ngày 2026-09-03 chỗ đó là 188.8 MB / 246 file.
+
+Một cảnh báo phải nói thẳng: trên máy hiện tại `C:` và `D:` là hai phân vùng của **cùng một ổ NVMe**. Sao lưu sang `D:` chống được xóa nhầm, `git clean`, hỏng thư mục repo - nhưng **không** chống được hỏng ổ, vì hỏng ổ là mất cả hai. Muốn chống được thì bản sao phải nằm ngoài ổ này: ổ cắm ngoài, máy khác, hoặc thư mục đồng bộ lên mây. Việc đó vượt quá quyết định STO-002/STO-003 nên chủ dự án chọn.
 
 Lệnh chép từng file và **băm lại từng file** ở cả hai đầu: tên file chính là mã băm, nên nguồn hỏng hay bản sao lệch đều bị bắt chứ không chép nhầm im lặng. Đã có thì bỏ qua, nên chạy lại rất nhanh.
 

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import process from "node:process";
 
 import { verifyReleaseChain } from "@luatvn/ingest";
@@ -26,6 +26,7 @@ const usage = `Usage:
   pnpm dataset review   <staging-file.json>
   pnpm dataset queue    <staging-file.json> [--sample 0.05] [--seed 1]
   pnpm dataset promote  <staging-file.json> (--version <pv_id> | --amendment <amd_id>) --reviewed-by "<full name>"
+  pnpm dataset cumulate <new-staging.json> --release <rel_id> [--from <rel_id>] [--out <file>] [--data-dir <dir>]
   pnpm dataset publish  <staging-file.json> --reviewed-by "<full name>" [--data-dir <dir>] [--sources-dir <dir>]
   pnpm dataset verify   [--data-dir <dir>] [--allow-hosts h1,h2]
   pnpm dataset sources  [--verify] [--dir <sources-dir>] [--manifest <manifest.json>]
@@ -44,12 +45,23 @@ verify re-derives the legal text of the published release from the sources
 archived inside it and compares the hashes. It proves the text came from that
 archived source and that a named reviewer vouched for each record; it does not
 prove the source itself states the law correctly.
-backup copies the shared evidence archive to another disk and checks every
-copied file against its own digest. The archive is the one part of the data
-that git does not carry (ADR-0005/0007), so losing the disk loses it; owner
-decision 2026-09-03 (ADR-0008 STO-001) is that a backup is required, with the
-location and schedule chosen by whoever runs it. --verify-only compares an
-existing backup without writing.
+cumulate builds the next release as the whole corpus rather than only the
+newest crawl. A release is what the server answers from, so publishing a
+staging file that holds only the latest 20 documents would stop serving every
+document published before it. cumulate re-stamps the current release and the
+new staging onto one release id, merges them by record id with the new
+extraction winning, and merges their review logs so no record loses the entry
+that vouches for it.
+
+backup copies two things to another disk and hash-checks both. First the
+shared evidence archive, whose files are named by their own digest. Second the
+work in progress under working/: the downloaded sources and the staging drafts
+of everything crawled but not yet published. Neither is carried by git
+(ADR-0005/0007), and the second is the more exposed of the two, because until a
+release is published it exists nowhere else at all. Owner decision 2026-09-03
+(ADR-0008 STO-001) requires a backup; the location and schedule belong to
+whoever runs it. --verify-only compares an existing backup without writing and
+exits 1 if anything is missing or stale.
 sources rebuilds data/manual/sources-manifest.json from the local source store
 (ADR-0005: the files themselves never enter git); --verify checks the store
 against the committed manifest and exits 1 on any difference.`;
@@ -442,6 +454,105 @@ async function runVerify(dataDirectory, flags) {
   out("note: this proves derivation and review, not that the source states the law correctly");
 }
 
+// A release is a snapshot of the whole corpus, not a changelog: the server
+// answers from exactly one of them. Publishing a staging file that holds only
+// the documents crawled since yesterday would therefore un-serve everything
+// crawled before yesterday - the records would still exist in an older release
+// directory, but nothing would read them. cumulate is what keeps a run of
+// releases additive.
+async function runCumulate(newStagingFile, dataDirectory, flags) {
+  const releaseId = flags.get("release");
+  if (releaseId === undefined) {
+    fail("cumulate requires --release <rel_id> naming the release being built");
+    return;
+  }
+  const outPath =
+    flags.get("out") ?? join(dataDirectory, `staging-${releaseId.replaceAll("_", "-")}.json`);
+
+  let fromId = flags.get("from");
+  if (fromId === undefined) {
+    // No pointer yet means there is nothing to carry forward, which is the
+    // normal state of the very first release rather than an error.
+    const pointer = await getPublishedPointer(dataDirectory).catch(() => null);
+    fromId = pointer?.currentReleaseId;
+  }
+  if (fromId === undefined) {
+    fail("không có bản phát hành nào để cộng dồn; publish thẳng staging này là đủ");
+    return;
+  }
+  const baseText = await readFile(join(dataDirectory, "releases", fromId, "dataset.json"), "utf8");
+  const base = JSON.parse(stripByteOrderMark(baseText));
+  const next = JSON.parse(stripByteOrderMark(await readFile(newStagingFile, "utf8")));
+
+  // The newer extraction wins on a record id present in both: a re-crawl only
+  // happens after the extractor changed, and the point of re-crawling is to
+  // replace text that was wrong.
+  const restamp = (record) => ({ ...record, datasetReleaseId: releaseId });
+  const provisionVersions = new Map();
+  const amendments = new Map();
+  for (const source of [next, base]) {
+    for (const version of source.provisionVersions ?? []) {
+      if (!provisionVersions.has(version.provisionVersionId)) {
+        provisionVersions.set(version.provisionVersionId, restamp(version));
+      }
+    }
+    for (const amendment of source.amendments ?? []) {
+      if (!amendments.has(amendment.amendmentId)) {
+        amendments.set(amendment.amendmentId, restamp(amendment));
+      }
+    }
+  }
+
+  const merged = {
+    ...base,
+    amendments: [...amendments.values()],
+    datasetReleaseId: releaseId,
+    provisionVersions: [...provisionVersions.values()],
+  };
+  const decoded = decodeManualDatasetFile(merged);
+  if (!decoded.ok) {
+    fail("CUMULATE_INVALID: bản gộp không khớp schema");
+    for (const issue of decoded.issues) fail(`  - ${issue.path}: ${issue.message}`);
+    return;
+  }
+  await writeFile(
+    outPath,
+    `${JSON.stringify(merged, null, 2)}
+`,
+    "utf8",
+  );
+
+  // A record without its review entry is a record nobody vouched for, and
+  // verify counts vouchers. Carry both logs across, keyed so the same entry is
+  // not written twice.
+  const baseLog = JSON.parse(
+    await readFile(join(dataDirectory, "releases", fromId, "review-log.json"), "utf8").catch(
+      () => "[]",
+    ),
+  );
+  const nextLog = await readReviewLog(newStagingFile);
+  const entries = new Map();
+  for (const entry of [...baseLog, ...nextLog]) {
+    entries.set(
+      `${String(entry.target)}|${String(entry.reviewedBy)}|${String(entry.reviewedAt)}`,
+      entry,
+    );
+  }
+  await writeFile(
+    `${outPath}.review-log.json`,
+    `${JSON.stringify([...entries.values()], null, 2)}
+`,
+    "utf8",
+  );
+
+  out(`gộp ${fromId} + ${newStagingFile} -> ${releaseId}`);
+  out(`  Điều trong bản mới     : ${String(next.provisionVersions?.length ?? 0)}`);
+  out(`  Điều đã có từ ${fromId} : ${String(base.provisionVersions?.length ?? 0)}`);
+  out(`  tổng sau khi gộp       : ${String(merged.provisionVersions.length)}`);
+  out(`  nhật ký duyệt          : ${String(entries.size)} mục`);
+  out(`  ghi: ${outPath}`);
+}
+
 async function runBackup(dataDirectory, flags) {
   const target = flags.get("to");
   if (target === undefined) {
@@ -513,7 +624,82 @@ async function runBackup(dataDirectory, flags) {
   );
   out(`  lệch mã băm            : ${String(mismatched)}`);
   out(`  đích: ${target}`);
-  if (mismatched > 0 || missing > 0) {
+
+  // The archive holds only what published releases point at. Everything crawled
+  // since the last publish - the downloaded PDFs and the staging drafts - lives
+  // in git-ignored directories, so it exists in exactly one place on one disk
+  // and a mistake there loses days of crawling with nothing to restore from.
+  // That is the material the owner asked to be stored somewhere concrete.
+  const workingRoots = [join(dataDirectory, "sources"), dataDirectory];
+  let workBytes = 0;
+  let workCopied = 0;
+  let workSame = 0;
+  let workUpdated = 0;
+  let workMissing = 0;
+  for (const root of workingRoots) {
+    const isDataRoot = root === dataDirectory;
+    let entries;
+    try {
+      // eslint-disable-next-line no-await-in-loop -- two roots, read one at a time
+      entries = await readdir(root, { recursive: !isDataRoot, withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+      // At the data root only the staging drafts, their sidecars, and the
+      // ledger of which URLs have been crawled are working files; releases and
+      // the pointer are in git already. The ledger matters as much as the
+      // drafts: losing it does not lose text, but it makes the next run re-walk
+      // every listing and re-fetch what it already has.
+      if (isDataRoot && !entry.name.startsWith("staging") && entry.name !== "crawl-state.json") {
+        continue;
+      }
+      const from = join(entry.parentPath ?? root, entry.name);
+      const relativePath = relative(dataDirectory, from);
+      const destination = join(target, "working", relativePath);
+      // eslint-disable-next-line no-await-in-loop -- one file at a time keeps memory flat
+      const source = await readFile(from);
+      workBytes += source.length;
+      const digest = createHash("sha256").update(source).digest("hex");
+      let existing = null;
+      try {
+        // eslint-disable-next-line no-await-in-loop -- see above
+        existing = await readFile(destination);
+      } catch {
+        existing = null;
+      }
+      if (existing !== null && createHash("sha256").update(existing).digest("hex") === digest) {
+        workSame += 1;
+        continue;
+      }
+      if (verifyOnly) {
+        fail(`  THIẾU/CŨ     working/${relativePath}`);
+        workMissing += 1;
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop -- see above
+      await mkdir(dirname(destination), { recursive: true });
+      // eslint-disable-next-line no-await-in-loop -- see above
+      await writeFile(destination, source);
+      if (existing === null) {
+        workCopied += 1;
+      } else {
+        workUpdated += 1;
+      }
+    }
+  }
+  out(`file đang làm dở (chưa phát hành, không nằm trong git): ${(workBytes / 1e6).toFixed(1)} MB`);
+  out(`  đã trùng                : ${String(workSame)}`);
+  out(
+    verifyOnly
+      ? `  thiếu hoặc đã cũ        : ${String(workMissing)}`
+      : `  chép mới ${String(workCopied)}, cập nhật ${String(workUpdated)}`,
+  );
+
+  if (mismatched > 0 || missing > 0 || workMissing > 0) {
     fail("sao lưu CHƯA đầy đủ hoặc có file lệch; xử lý từng dòng ở trên rồi chạy lại");
     return;
   }
@@ -574,6 +760,10 @@ async function run() {
     }
     case "sources": {
       await runSources(flags, flags.get("verify") === "true");
+      return;
+    }
+    case "cumulate": {
+      await runCumulate(positional[0], dataDirectory, flags);
       return;
     }
     case "backup": {

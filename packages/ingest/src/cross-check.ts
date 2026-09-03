@@ -285,7 +285,8 @@ function checkCharacterBalance(input: CrossCheckInput): CrossCheckResult {
     input.report.unassignedLines.reduce((sum, line) => sum + line.text.length, 0) +
     input.report.apparatusLines.reduce((sum, line) => sum + line.text.length, 0) +
     input.report.runningLines.reduce((sum, line) => sum + line.length, 0) +
-    input.report.closingBlockLines.reduce((sum, line) => sum + line.length, 0);
+    input.report.closingBlockLines.reduce((sum, line) => sum + line.length, 0) +
+    input.report.annexLines.reduce((sum, line) => sum + line.text.length, 0);
   const accounted = inArticles + elsewhere;
   if (accounted === sourceCharacters) {
     return {

@@ -57,8 +57,12 @@ const publish = [
     test: (p) => p.startsWith("docs/decisions/") && p !== "docs/decisions/0002-prototype-first.md",
   },
   // Only these two files under data/. Everything else there is legal data or a
-  // manifest of it, and whether archived sources may be served publicly is an
-  // open owner decision (P-025 VER-005) - so it must never leak by default.
+  // manifest of it. VER-005 (ADR-0008) settled that a running server may hand
+  // out archived source bytes by digest; it did not settle whether the corpus
+  // is mirrored into a public git repository, which is a different act with a
+  // different cost - the archive grows about 1 MB per document and git history
+  // never gives it back. Until the owner decides that separately, data stays
+  // out of the mirror by default.
   {
     reason: "hướng dẫn thư mục dữ liệu",
     test: (p) => p === "data/manual/README.md" || p === "data/manual/sources/README.md",
@@ -84,7 +88,7 @@ const withhold = [
   { reason: "tài liệu tham chiếu nội bộ", test: (p) => p.startsWith("docs/reference/") },
   { reason: "công cụ dựng tài liệu nội bộ", test: (p) => p === "tools/build_architecture_pdf.py" },
   {
-    reason: "dữ liệu pháp luật và manifest (VER-005 chưa quyết)",
+    reason: "dữ liệu pháp luật và manifest (chưa quyết việc mirror công khai)",
     test: (p) => p.startsWith("data/"),
   },
 ];

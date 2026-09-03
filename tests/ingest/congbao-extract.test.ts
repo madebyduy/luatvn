@@ -190,3 +190,103 @@ describe("segmenting a gazette PDF into provisions", () => {
     expect(first.draft.provisionVersions[0]?.provisionVersionId).toContain("_e20260101");
   });
 });
+
+describe("an instrument attached behind the last article", () => {
+  it("holds the annex out of the last article instead of hashing it in", () => {
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Phạm vi"),
+        line("Nội dung của Điều 1."),
+        line("Điều 2. Điều khoản thi hành"),
+        line("1. Thủ trưởng đơn vị chịu trách nhiệm thi hành./."),
+        line("BỘ TRƯỞNG", { x: 400 }),
+        line("Người ký thử nghiệm", { x: 400 }),
+        line("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"),
+        line("QCVN 99:2026/TEST"),
+        line("1. QUY ĐỊNH CHUNG"),
+        line("1.1. Phạm vi điều chỉnh"),
+      ]),
+    );
+
+    const last = draft.provisionVersions.at(-1);
+    expect(last?.legalText).toBe(
+      "Điều 2. Điều khoản thi hành\n1. Thủ trưởng đơn vị chịu trách nhiệm thi hành./.",
+    );
+    expect(report.annexLines.map((entry) => entry.text)).toEqual([
+      "CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM",
+      "QCVN 99:2026/TEST",
+      "1. QUY ĐỊNH CHUNG",
+      "1.1. Phạm vi điều chỉnh",
+    ]);
+    expect(report.annexCutRefused).toBeNull();
+  });
+
+  it("refuses to cut when articles continue past the marker, and says so", () => {
+    // Cutting here would drop Điều 2 where no later check could notice: the
+    // articles kept would still read 1..1 with no gap.
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Phạm vi"),
+        line("Biểu mẫu kèm theo Điều này:"),
+        line("PHỤ LỤC I"),
+        line("Điều 2. Đối tượng"),
+        line("Nội dung của Điều 2."),
+      ]),
+    );
+
+    expect(draft.provisionVersions).toHaveLength(2);
+    expect(report.annexLines).toEqual([]);
+    expect(report.annexCutRefused).toContain("PHỤ LỤC I");
+  });
+
+  it("does not cut on the national heading that opens the document itself", () => {
+    const { draft, report } = draftOf(
+      documentOf([
+        line("CỘNG HÒA XÃ HỘI CHỦ NGHĨA VIỆT NAM"),
+        line("Căn cứ Luật Tổ chức Chính phủ;"),
+        line("Điều 1. Phạm vi"),
+        line("Nội dung của Điều 1."),
+      ]),
+    );
+
+    expect(draft.provisionVersions).toHaveLength(1);
+    expect(report.annexLines).toEqual([]);
+  });
+});
+
+describe("annex markers as they are actually printed", () => {
+  it("cuts on a lower-case 'Phụ lục' heading standing alone", () => {
+    const { report } = draftOf(
+      documentOf([
+        line("Điều 1. Điều khoản thi hành"),
+        line("Có hiệu lực thi hành./."),
+        line("Phụ lục"),
+        line("DANH MỤC HÀNG HÓA"),
+      ]),
+    );
+    expect(report.annexLines.map((entry) => entry.text)).toEqual(["Phụ lục", "DANH MỤC HÀNG HÓA"]);
+  });
+
+  it("cuts on a form schedule that names the document issuing it", () => {
+    const { report } = draftOf(
+      documentOf([
+        line("Điều 1. Điều khoản thi hành"),
+        line("Có hiệu lực thi hành./."),
+        line("Mẫu CC01 ban hành kèm theo Thông tư số 01/2026/NĐ-TEST"),
+        line("PHIẾU THU NHẬN"),
+      ]),
+    );
+    expect(report.annexLines).toHaveLength(2);
+  });
+
+  it("keeps a reference to an annex inside the article that makes it", () => {
+    const { draft, report } = draftOf(
+      documentOf([
+        line("Điều 1. Phạm vi"),
+        line("Danh mục hàng hóa theo Phụ lục I ban hành kèm theo Thông tư này."),
+      ]),
+    );
+    expect(report.annexLines).toEqual([]);
+    expect(draft.provisionVersions[0]?.legalText).toContain("Phụ lục I");
+  });
+});

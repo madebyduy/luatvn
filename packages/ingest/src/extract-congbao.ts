@@ -44,6 +44,28 @@ const chapterPattern = /^Chương\s+[IVXLCDM]+(?:\s+[^\p{Ll}]+)?$/u;
 const sectionPattern = /^Mục\s+\d+(?:\s+[^\p{Ll}]+)?$/u;
 
 /**
+ * A circular often carries a second instrument behind it - a national technical
+ * regulation, a schedule of forms, an annex - which is published in the same
+ * PDF and begins the way every Vietnamese instrument begins: with the national
+ * heading, or with the word "PHỤ LỤC" standing alone. That attached instrument
+ * has its own numbering, so it lands inside the final article and takes the
+ * article's text with it: Điều 4 of 127/2026/TT-BCA held 550 lines, of which
+ * 8 were the article and 542 were QCVN 13:2026/BCA.
+ *
+ * Each marker must stand as the whole line. Body text refers to annexes all the
+ * time - "theo Phụ lục I ban hành kèm theo Thông tư này" - and that reference is
+ * legal text that must stay in its article; only a line that is nothing but the
+ * heading opens an annex.
+ */
+const annexStartPatterns = [
+  /^CỘNG\s+HÒA\s+XÃ\s+HỘI\s+CHỦ\s+NGHĨA\s+VIỆT\s+NAM$/u,
+  /^PHỤ\s+LỤC(?:\s+[IVXLCDM\d]+[A-Za-zĐ]?)?\s*$/iu,
+  // A form schedule opens by naming itself and the document that issued it:
+  // "Mẫu CC01 ban hành kèm theo Thông tư số 118/2026/TT-BCA".
+  /^Mẫu\s+\S+\s+(?:ban\s+hành\s+)?kèm\s+theo\s+/iu,
+];
+
+/**
  * A consolidated document ("văn bản hợp nhất") prints an editorial apparatus in
  * a smaller face: footnotes that quote other documents and read exactly like
  * headings - "Điều 7. Điều khoản thi hành" at 14.1pt against 19.9pt body text.
@@ -95,6 +117,18 @@ export interface CongBaoDraftReport {
    * see it was recognised rather than lost.
    */
   readonly closingBlockLines: readonly string[];
+  /**
+   * The attached instrument that followed the last article, held out of it.
+   * Listed verbatim rather than counted, because cutting text is the one
+   * operation that can lose law silently: a reviewer must be able to read what
+   * was removed and say whether it was really an annex.
+   */
+  readonly annexLines: readonly { readonly page: number; readonly text: string }[];
+  /**
+   * Set when an annex marker was found but the cut was refused because articles
+   * continued past it. Names what was seen, so the refusal is not invisible.
+   */
+  readonly annexCutRefused: string | null;
 }
 
 export interface CongBaoDraftResult {
@@ -172,6 +206,41 @@ export function extractCongBaoDraft(
       continue;
     }
     body.push(line);
+  }
+
+  // Cut the attached instrument off the body before segmentation, so it never
+  // reaches an article's text or its hash. The cut is refused when the removed
+  // tail still contains the article that should follow the last one kept: that
+  // means the marker was something else - a form quoted inside a provision, a
+  // page header the running-line pass did not catch - and cutting there would
+  // drop real articles where the numbering check could not see it happen.
+  let annexLines: { page: number; text: string }[] = [];
+  let annexCutRefused: string | null = null;
+  let lastArticleBeforeMarker: number | null = null;
+  let markerIndex = -1;
+  for (const [index, line] of body.entries()) {
+    const article = articlePattern.exec(line.text);
+    if (article !== null) {
+      lastArticleBeforeMarker = Number(article[1]);
+      continue;
+    }
+    if (lastArticleBeforeMarker !== null && annexStartPatterns.some((p) => p.test(line.text))) {
+      markerIndex = index;
+      break;
+    }
+  }
+  if (markerIndex >= 0 && lastArticleBeforeMarker !== null) {
+    const tail = body.slice(markerIndex);
+    const expected = lastArticleBeforeMarker + 1;
+    const continuation = tail.find(
+      (line) => Number(articlePattern.exec(line.text)?.[1]) === expected,
+    );
+    if (continuation === undefined) {
+      annexLines = tail.map((line) => ({ page: line.page, text: line.text }));
+      body.length = markerIndex;
+    } else {
+      annexCutRefused = `thấy mốc phụ lục "${body[markerIndex]?.text ?? ""}" nhưng sau đó vẫn còn "${continuation.text}", nên không cắt`;
+    }
   }
 
   const { evidence, reference } = options;
@@ -321,6 +390,8 @@ export function extractCongBaoDraft(
   return {
     draft: decoded.value,
     report: {
+      annexCutRefused,
+      annexLines,
       apparatusLines,
       articleNumbers: numbers,
       closingBlockLines,
