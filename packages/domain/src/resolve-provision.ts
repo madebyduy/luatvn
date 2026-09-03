@@ -1,5 +1,9 @@
 import type { DatasetReleaseId, ProvisionId, ProvisionVersionId } from "./ids.js";
-import type { PublishedProvisionVersion, VerifiedPublishedProvisionVersion } from "./model.js";
+import {
+  isServableReviewStatus,
+  type PublishedProvisionVersion,
+  type ServablePublishedProvisionVersion,
+} from "./model.js";
 import { assertValidInterval, contains, type IsoInstant, type LegalDate } from "./temporal.js";
 
 export interface ResolveProvisionAtInput {
@@ -13,7 +17,7 @@ export interface ResolveProvisionAtInput {
 export type ResolveProvisionAtResult =
   | {
       readonly status: "resolved";
-      readonly version: VerifiedPublishedProvisionVersion;
+      readonly version: ServablePublishedProvisionVersion;
     }
   | {
       readonly status: "unknown";
@@ -38,9 +42,11 @@ export function resolveProvisionAt(input: ResolveProvisionAtInput): ResolveProvi
     );
   });
 
+  // Both human-verified and machine-checked versions may be served; the
+  // reviewStatus travels with the answer so the caller can tell which it got.
   const verifiedMatches = temporalMatches.filter(
-    (version): version is VerifiedPublishedProvisionVersion =>
-      version.reviewStatus === "verified" && version.evidence.length > 0,
+    (version): version is ServablePublishedProvisionVersion =>
+      isServableReviewStatus(version.reviewStatus) && version.evidence.length > 0,
   );
 
   if (verifiedMatches.length === 1) {

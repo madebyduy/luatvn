@@ -1,13 +1,18 @@
+import { spawnSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import process from "node:process";
 
-import { loadPublishedRelease } from "@luatvn/manual-dataset";
-
+import {
+  loadPublishedRelease,
+  markRecordMachineChecked,
+  ReviewError,
+} from "@luatvn/manual-dataset";
 import { extractPdfLines, PdfTextError } from "@luatvn/pdf-text";
 
 import {
   checkExtraction,
+  crossCheckCongBao,
   CongBaoExtractError,
   CongBaoPageError,
   extractCongBaoDraft,
@@ -40,7 +45,7 @@ const usage = `Usage:
                     --out <dir> --max <n> [--allow-hosts h1,h2] [--min-interval-ms n]
   pnpm ingest drift <detail-url> [--data-dir <dir>] [--content-action <id>]
   pnpm ingest congbao <detail-url> --release <rel_id> --out <staging.json>
-                    [--sources-dir <dir>] [--allow-hosts h1,h2]
+                    [--sources-dir <dir>] [--allow-hosts h1,h2] [--no-machine-check]
 
 fetch: store one document plus .evidence.json (URL, SHA-256, retrievedAt).
 draft: fetch a vbpl.vn detail payload and extract an under_review staging draft
@@ -68,7 +73,7 @@ function fail(line) {
   process.exitCode = 1;
 }
 
-const booleanFlags = new Set(["with-amendments"]);
+const booleanFlags = new Set(["with-amendments", "no-machine-check"]);
 
 function parseArguments(argv) {
   const positional = [];
@@ -275,6 +280,28 @@ async function runDraft(detailUrl, flags, withAmendments) {
   out(`next: pnpm dataset review ${stagingPath}`);
 }
 
+function secondExtractionOf(pdfPath) {
+  const spawned = spawnSync("pdftotext", ["-layout", "-enc", "UTF-8", pdfPath, "-"], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (spawned.error !== undefined || spawned.status !== 0 || typeof spawned.stdout !== "string") {
+    return null;
+  }
+  return spawned.stdout;
+}
+
+async function appendReviewLog(stagingPath, entries) {
+  const logPath = `${stagingPath}.review-log.json`;
+  let existing = [];
+  try {
+    existing = JSON.parse(await readFile(logPath, "utf8"));
+  } catch {
+    existing = [];
+  }
+  await writeFile(logPath, `${JSON.stringify([...existing, ...entries], null, 2)}\n`, "utf8");
+}
+
 async function runCongBao(detailUrl, flags) {
   const datasetReleaseId = flags.get("release");
   const stagingPath = flags.get("out");
@@ -304,7 +331,65 @@ async function runCongBao(detailUrl, flags) {
     reference,
   });
 
-  await writeFile(stagingPath, `${JSON.stringify(draft, null, 2)}\n`, "utf8");
+  // P-018: six cross-checks between the gazette page, the PDF body and our own
+  // output. Records that pass every check become machine_checked; the rest stay
+  // under_review for a person. The per-check results are written next to the
+  // draft so the review queue can show exactly what disagreed.
+  const checks = crossCheckCongBao({
+    draft,
+    pdfText: text,
+    reference,
+    report,
+    secondExtraction: secondExtractionOf(join(sourcesDirectory, storedName)),
+  });
+  let stagingText = `${JSON.stringify(draft, null, 2)}\n`;
+  const machineAudits = [];
+  let machineChecked = 0;
+  if (flags.get("no-machine-check") !== "true") {
+    for (const version of draft.provisionVersions) {
+      const provisionFlagged = checks.flaggedProvisionVersionIds.includes(
+        version.provisionVersionId,
+      );
+      try {
+        const marked = markRecordMachineChecked({
+          checks: {
+            allPassed: checks.allPassed && !provisionFlagged,
+            flagged: provisionFlagged ? [...checks.flagged, "NUMBERING"] : checks.flagged,
+            notAvailable: checks.notAvailable,
+          },
+          datasetText: stagingText,
+          provisionVersionId: version.provisionVersionId,
+        });
+        stagingText = marked.updatedDatasetText;
+        machineAudits.push(marked.audit);
+        machineChecked += 1;
+      } catch (error) {
+        if (!(error instanceof ReviewError) || error.code !== "CHECKS_NOT_PASSED") {
+          throw error;
+        }
+      }
+    }
+  }
+  await writeFile(stagingPath, stagingText, "utf8");
+  await writeFile(
+    `${stagingPath}.checks.json`,
+    `${JSON.stringify(
+      {
+        allPassed: checks.allPassed,
+        documentNumber: reference.documentNumber,
+        flagged: checks.flagged,
+        flaggedProvisionVersionIds: checks.flaggedProvisionVersionIds,
+        notAvailable: checks.notAvailable,
+        results: checks.results,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  if (machineAudits.length > 0) {
+    await appendReviewLog(stagingPath, machineAudits);
+  }
   const characters = draft.provisionVersions.reduce(
     (total, version) => total + version.legalText.length,
     0,
@@ -318,6 +403,14 @@ async function runCongBao(detailUrl, flags) {
       `  PDF nguồn: ${storedName} (${pdf.sourceSha256})`,
       `  cỡ chữ thân bài ${String(report.bodyFontSize)}; bỏ ${String(report.runningLines.length)} dòng header lặp, giữ riêng ${String(report.apparatusLines.length)} dòng chú thích`,
     ].join("\n"),
+  );
+  out("  đối soát (P-018):");
+  for (const result of checks.results) {
+    const mark = result.status === "pass" ? "ĐẠT " : result.status === "flag" ? "CỜ  " : "CHƯA";
+    out(`    ${mark} ${result.check.padEnd(18)} ${result.detail}`);
+  }
+  out(
+    `  ${String(machineChecked)}/${String(draft.provisionVersions.length)} Điều lên machine_checked; ${String(draft.provisionVersions.length - machineChecked)} ở lại under_review cho người xem`,
   );
   if (report.closingBlockLines.length > 0) {
     // Shown, not silently removed: this text was in the document and a reviewer
@@ -477,7 +570,8 @@ run().catch((error) => {
     error instanceof MergeDraftsError ||
     error instanceof CongBaoPageError ||
     error instanceof CongBaoExtractError ||
-    error instanceof PdfTextError
+    error instanceof PdfTextError ||
+    error instanceof ReviewError
   ) {
     fail(error.code === undefined ? error.message : `${error.code}: ${error.message}`);
     return;

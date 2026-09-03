@@ -66,6 +66,7 @@ export type PublishedPointer = z.infer<typeof publishedPointerSchema>;
 const reviewLogSchema = z.array(
   z
     .object({
+      method: z.enum(["human", "machine"]).optional(),
       reviewedAt: z.string().min(1).max(32),
       reviewedBy: z.string().min(1).max(256),
       target: z.string().min(1).max(128),

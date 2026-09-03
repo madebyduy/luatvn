@@ -28,7 +28,7 @@ export const maximumLegalTextLength = 200_000;
 export const maximumProvisionVersionRecords = 10_000;
 export const maximumAmendmentRecords = 10_000;
 
-const reviewStatusSchema = z.enum(["verified", "under_review", "unverified"]);
+const reviewStatusSchema = z.enum(["verified", "machine_checked", "under_review", "unverified"]);
 
 const evidenceReferenceSchema = z
   .object({

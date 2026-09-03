@@ -502,6 +502,14 @@ button[type="submit"] {
   color: var(--ok);
 }
 
+/* Servable like verified, so the same green family - but dashed, because no
+   person has looked yet. Visibly different from both neighbours on purpose. */
+.chip-machine_checked {
+  background: var(--ok-surface);
+  border: 1px dashed var(--ok);
+  color: var(--ok);
+}
+
 .chip-unknown,
 .chip-not_effective,
 .chip-under_review {

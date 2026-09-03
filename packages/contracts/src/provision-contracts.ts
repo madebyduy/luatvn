@@ -84,7 +84,7 @@ export const GetCatalogRequestSchema = z.object({ context: QueryContextSchema })
 const CatalogVersionSchema = z
   .object({
     provisionVersionId: ProvisionVersionIdSchema,
-    reviewStatus: z.enum(["verified", "under_review", "unverified"]),
+    reviewStatus: z.enum(["verified", "machine_checked", "under_review", "unverified"]),
     validFrom: LegalDateSchema,
     validTo: LegalDateSchema.nullable(),
   })
@@ -125,7 +125,7 @@ export const CitationSchema = z
     provisionId: ProvisionIdSchema,
     provisionVersionId: ProvisionVersionIdSchema,
     retrievedAt: IsoInstantSchema,
-    reviewStatus: z.enum(["verified", "under_review", "unverified"]),
+    reviewStatus: z.enum(["verified", "machine_checked", "under_review", "unverified"]),
     sourceSha256: Sha256Schema,
     sourceUrl: z.string().url().max(2_048),
     validAt: LegalDateSchema,
@@ -222,7 +222,7 @@ const AmendmentRelationSchema = z
     effectiveFrom: LegalDateSchema,
     evidence: z.array(EvidenceSchema).min(1).readonly(),
     relationType: z.enum(["amends", "repeals", "replaces", "corrects"]),
-    reviewStatus: z.enum(["verified", "under_review", "unverified"]),
+    reviewStatus: z.enum(["verified", "machine_checked", "under_review", "unverified"]),
     sourceProvisionId: ProvisionIdSchema,
     targetProvisionId: ProvisionIdSchema,
   })

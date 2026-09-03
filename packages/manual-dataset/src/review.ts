@@ -9,7 +9,8 @@ export type ReviewErrorCode =
   | "TARGET_REQUIRED"
   | "RECORD_NOT_FOUND"
   | "ALREADY_VERIFIED"
-  | "REVIEWER_REQUIRED";
+  | "REVIEWER_REQUIRED"
+  | "CHECKS_NOT_PASSED";
 
 export class ReviewError extends Error {
   public constructor(
@@ -33,6 +34,21 @@ export interface ReviewAuditEntry {
   readonly reviewedAt: IsoInstant;
   readonly reviewedBy: string;
   readonly target: string;
+  /** Who did the checking. Absent means human, for logs written before P-018. */
+  readonly method?: "human" | "machine";
+}
+
+export interface MachineCheckSummary {
+  readonly allPassed: boolean;
+  readonly flagged: readonly string[];
+  readonly notAvailable: readonly string[];
+}
+
+export interface MarkMachineCheckedInput {
+  readonly datasetText: string;
+  readonly provisionVersionId: string;
+  readonly checks: MachineCheckSummary;
+  readonly now?: IsoInstant;
 }
 
 export interface PromoteRecordResult {
@@ -133,7 +149,59 @@ export function promoteRecordToVerified(input: PromoteRecordInput): PromoteRecor
   }
 
   return {
-    audit: { reviewedAt, reviewedBy, target },
+    audit: { method: "human", reviewedAt, reviewedBy, target },
+    updatedDatasetText: `${JSON.stringify(updated, null, 2)}\n`,
+  };
+}
+
+// The machine path (P-018). It raises a record to machine_checked - never to
+// verified - and only when every cross-check ran and agreed. A check that
+// could not run counts as not passed: "did not look" is not "looked and it was
+// fine". The audit entry says a machine did this, so the log cannot be read as
+// a person having vouched.
+export function markRecordMachineChecked(input: MarkMachineCheckedInput): PromoteRecordResult {
+  if (!input.checks.allPassed) {
+    const reasons = [
+      ...input.checks.flagged.map((check) => `${check} gắn cờ`),
+      ...input.checks.notAvailable.map((check) => `${check} chưa chạy được`),
+    ];
+    throw new ReviewError(
+      "CHECKS_NOT_PASSED",
+      `Record ${input.provisionVersionId} stays under_review: ${reasons.join(", ")}`,
+    );
+  }
+  const dataset = decodeDatasetText(input.datasetText);
+  const record = dataset.provisionVersions.find(
+    (version) => version.provisionVersionId === input.provisionVersionId,
+  );
+  if (record === undefined) {
+    throw new ReviewError(
+      "RECORD_NOT_FOUND",
+      `No provision version ${input.provisionVersionId} exists in the staging dataset`,
+    );
+  }
+  if (record.reviewStatus === "verified") {
+    throw new ReviewError(
+      "ALREADY_VERIFIED",
+      `Provision version ${input.provisionVersionId} is already verified; a machine does not lower it`,
+    );
+  }
+  const reviewedAt = input.now ?? parseIsoInstant(new Date().toISOString());
+  const updated: ManualDatasetFile = {
+    ...dataset,
+    provisionVersions: dataset.provisionVersions.map((version) =>
+      version.provisionVersionId === record.provisionVersionId
+        ? Object.assign({}, version, { reviewStatus: "machine_checked" as const })
+        : version,
+    ),
+  };
+  return {
+    audit: {
+      method: "machine",
+      reviewedAt,
+      reviewedBy: "machine:cross-check",
+      target: record.provisionVersionId,
+    },
     updatedDatasetText: `${JSON.stringify(updated, null, 2)}\n`,
   };
 }

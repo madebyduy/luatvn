@@ -92,8 +92,10 @@ export function validateReleaseForPublish(
   const versionsByProvision = new Map<string, PublishedProvisionVersion[]>();
   dataset.provisionVersions.forEach((version, index) => {
     const locator = `provisionVersions[${index}] ${version.provisionVersionId}`;
-    if (version.reviewStatus !== "verified") {
-      report(locator, "reviewStatus must be verified before publish");
+    // A provision may ship human-verified or machine-checked (P-018); its
+    // status travels to every reader. Anything weaker does not publish.
+    if (version.reviewStatus !== "verified" && version.reviewStatus !== "machine_checked") {
+      report(locator, "reviewStatus must be verified or machine_checked before publish");
     }
     if (sha256HexOfText(version.legalText) !== version.legalTextSha256) {
       report(locator, "legalTextSha256 does not match the legal text");

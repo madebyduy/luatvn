@@ -24,6 +24,7 @@ import {
 const usage = `Usage:
   pnpm dataset validate <staging-file.json> [--data-dir <dir>]
   pnpm dataset review   <staging-file.json>
+  pnpm dataset queue    <staging-file.json> [--sample 0.05] [--seed 1]
   pnpm dataset promote  <staging-file.json> (--version <pv_id> | --amendment <amd_id>) --reviewed-by "<full name>"
   pnpm dataset publish  <staging-file.json> --reviewed-by "<full name>" [--data-dir <dir>] [--sources-dir <dir>]
   pnpm dataset verify   [--data-dir <dir>] [--allow-hosts h1,h2]
@@ -32,6 +33,10 @@ const usage = `Usage:
   pnpm dataset status   [--data-dir <dir>]
 
 The default data directory is data/manual. See docs/08-operator-runbook.md.
+queue lists what a reviewer should read: every record the cross-checks flagged
+or could not run on, plus a seeded random sample of machine_checked records so
+the checker itself stays honest. Reads <staging-file>.checks.json written by
+"pnpm ingest congbao".
 promote is the only path that raises a record to verified; it appends an audit
 entry to <staging-file>.review-log.json.
 verify re-derives the legal text of the published release from the sources
@@ -140,6 +145,84 @@ async function runReview(file) {
   out(
     `release ${dataset.datasetReleaseId}: ${dataset.provisionVersions.length} version(s), ` +
       `${dataset.amendments.length} amendment(s), ${underReview} awaiting review`,
+  );
+}
+
+// Deterministic sampling: the same seed always picks the same records, so a
+// second reviewer can reproduce which ones were spot-checked.
+function seededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+async function runQueue(file, flags) {
+  const text = stripByteOrderMark(await readFile(file, "utf8"));
+  const decoded = decodeManualDatasetFile(JSON.parse(text));
+  if (!decoded.ok) {
+    fail("DATASET_INVALID: staging file does not match the dataset schema");
+    return;
+  }
+  const dataset = decoded.value;
+  let checks = null;
+  try {
+    checks = JSON.parse(await readFile(`${file}.checks.json`, "utf8"));
+  } catch {
+    out("không có file đối soát cạnh staging; liệt kê mọi record chưa duyệt");
+  }
+  const sampleRate = Number(flags.get("sample") ?? "0.05");
+  const seed = Number(flags.get("seed") ?? "1");
+  const random = seededRandom(seed);
+
+  const mustRead = [];
+  const sampled = [];
+  for (const version of dataset.provisionVersions) {
+    if (version.reviewStatus === "verified") continue;
+    if (version.reviewStatus === "under_review" || version.reviewStatus === "unverified") {
+      mustRead.push(version);
+      continue;
+    }
+    // machine_checked: sample deterministically
+    if (random() < sampleRate) sampled.push(version);
+  }
+
+  if (checks !== null) {
+    out(`đối soát tài liệu ${checks.documentNumber}:`);
+    for (const result of checks.results) {
+      const mark = result.status === "pass" ? "ĐẠT " : result.status === "flag" ? "CỜ  " : "CHƯA";
+      out(`  ${mark} ${String(result.check).padEnd(18)} ${result.detail}`);
+    }
+    out("");
+  }
+  out(`CẦN NGƯỜI XEM (${String(mustRead.length)}):`);
+  for (const version of mustRead) {
+    const why =
+      checks !== null && checks.flaggedProvisionVersionIds.includes(version.provisionVersionId)
+        ? "đánh số đứt trong Điều này"
+        : checks !== null && !checks.allPassed
+          ? `đối soát tài liệu chưa đạt: ${[...checks.flagged, ...checks.notAvailable].join(", ")}`
+          : "chưa qua đối soát";
+    out(`  ${version.provisionVersionId}  ${(version.heading ?? "").slice(0, 60)}`);
+    out(`      → ${why}`);
+  }
+  out("");
+  out(
+    `MẪU KIỂM NGẪU NHIÊN (${String(sampled.length)} trong số machine_checked, tỉ lệ ${String(sampleRate)}, seed ${String(seed)}):`,
+  );
+  for (const version of sampled) {
+    out(`  ${version.provisionVersionId}  ${(version.heading ?? "").slice(0, 60)}`);
+  }
+  const machineChecked = dataset.provisionVersions.filter(
+    (version) => version.reviewStatus === "machine_checked",
+  ).length;
+  out("");
+  out(
+    `tổng: ${String(dataset.provisionVersions.length)} Điều - ${String(machineChecked)} machine_checked, ${String(mustRead.length)} cần người, ${String(sampled.length)} mẫu. Người duyệt đọc ${String(mustRead.length + sampled.length)} thay vì ${String(dataset.provisionVersions.length)}.`,
   );
 }
 
@@ -388,6 +471,11 @@ async function run() {
     case "promote": {
       if (positional[0] === undefined) throw new Error(usage);
       await runPromote(positional[0], flags);
+      return;
+    }
+    case "queue": {
+      if (positional[0] === undefined) throw new Error(usage);
+      await runQueue(positional[0], flags);
       return;
     }
     case "publish": {

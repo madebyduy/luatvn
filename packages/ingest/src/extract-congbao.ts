@@ -78,6 +78,8 @@ export interface CongBaoDraftReport {
   readonly apparatusLines: readonly { readonly page: number; readonly text: string }[];
   /** Body lines before the first article: preamble and enacting citations. */
   readonly preambleLines: number;
+  /** The same lines verbatim; the cross-check reads the document number and dates from here. */
+  readonly preambleText: readonly string[];
   /**
    * Body lines after the first article that landed in no article - chapter
    * titles and the signature block, legitimately, but also anything the
@@ -193,6 +195,7 @@ export function extractCongBaoDraft(
   const collected: Collected[] = [];
   const structureHeadings: string[] = [];
   const unassignedLines: { page: number; text: string }[] = [];
+  const preambleText: string[] = [];
   let preambleLines = 0;
   let current: Collected | null = null;
   for (const line of body) {
@@ -213,6 +216,7 @@ export function extractCongBaoDraft(
     if (current === null) {
       if (collected.length === 0) {
         preambleLines += 1;
+        preambleText.push(line.text);
       } else {
         unassignedLines.push({ page: line.page, text: line.text });
       }
@@ -324,6 +328,7 @@ export function extractCongBaoDraft(
       documentNumber: reference.documentNumber,
       effectiveFrom: reference.effectiveFrom,
       preambleLines,
+      preambleText,
       provisionCount: provisionVersions.length,
       runningLines: [...new Set(runningLines)],
       structureHeadings,

@@ -128,6 +128,36 @@ Bốn trường hợp máy **từ chối** thay vì đoán:
 
 Sau đó vẫn đi đúng đường cũ: `pnpm dataset review` để xem, `pnpm dataset promote` từng record, rồi validate và publish (mục 2-3). Máy không tự đặt `verified`.
 
+## 1d. Đối soát tự động và duyệt theo ngoại lệ (P-018)
+
+`pnpm ingest congbao` tự chạy **sáu phép đối soát** giữa trang Công báo, PDF và chính kết quả bóc, rồi in từng phép:
+
+| Phép                | Đối soát gì                                                                                           |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| `DOCUMENT_NUMBER`   | số hiệu trên trang ↔ dòng `Số:` trong PDF                                                             |
+| `ISSUE_DATE`        | ngày ban hành trên trang ↔ dòng ngày ký trong PDF                                                     |
+| `EFFECTIVE_DATE`    | ngày hiệu lực trên trang ↔ Điều "Hiệu lực thi hành" trong văn bản (hiểu cả "kể từ ngày ký")           |
+| `NUMBERING`         | khoản 1,2,3… và điểm a,b,c,d,đ,e,g… liên tục trong từng Điều                                          |
+| `SECOND_EXTRACTOR`  | pdfjs ↔ `pdftotext` cùng ra một text (≥97% từ). Không có `pdftotext` thì báo **CHƯA**, không tính đạt |
+| `CHARACTER_BALANCE` | mọi ký tự của nguồn đều có tên bucket: Điều, lời nói đầu, Chương, chú thích, header, chữ ký           |
+
+Điều nào qua đủ sáu phép được máy đặt **`machine_checked`** và ghi vào `<staging>.review-log.json` với `method: "machine"`. Điều nào có một phép gắn cờ hoặc chưa chạy được thì **ở lại `under_review`**. Máy không bao giờ đặt `verified`.
+
+Kết quả từng phép nằm ở `<staging>.checks.json`. Xem hàng đợi cần người:
+
+```bash
+pnpm dataset queue data/manual/staging-rel-xxx.json --sample 0.05 --seed 1
+```
+
+Hàng đợi có hai phần: **CẦN NGƯỜI XEM** (mọi Điều chưa lên `machine_checked`, kèm lý do) và **MẪU KIỂM NGẪU NHIÊN** (một phần Điều đã `machine_checked`, chọn theo seed nên lặp lại được, để kiểm chính bộ đối soát). Người duyệt chỉ đọc hai phần đó rồi `promote` như mục 1b.
+
+Hai giới hạn phải nhớ:
+
+- Đối soát bắt **mâu thuẫn**, không bắt **sai sự thật**. PDF gốc có lỗi đánh máy thì hai bộ bóc cùng đồng ý với lỗi đó. Mẫu ngẫu nhiên tồn tại vì lý do này.
+- `machine_checked` **được publish và được phục vụ**, nhưng mọi mặt tiền hiện rõ mức này (quyết định chủ dự án 2026-09-01). Web hiện chip "Đã đối soát, chưa người duyệt"; MCP nói rõ trong quy tắc sử dụng. Đừng bao giờ gộp nó với "Người đã xác minh".
+
+Tắt tầng máy cho một lần chạy: `--no-machine-check`.
+
 ## 4b. Kiểm chứng độc lập (P-025)
 
 ```bash

@@ -8,10 +8,13 @@ const validityLabels: Record<string, string> = {
   unknown: "Chưa xác định",
 };
 
+// The level of checking is shown, never hidden: a reader acts on it. Names,
+// hashes and logs stay behind a click; this one word does not.
 const reviewLabels: Record<string, string> = {
+  machine_checked: "Đã đối soát, chưa người duyệt",
   under_review: "Đang chờ kiểm chứng",
   unverified: "Chưa kiểm chứng",
-  verified: "Đã kiểm chứng",
+  verified: "Người đã xác minh",
 };
 
 // The properties table Vietnamese legal databases put beside every document.

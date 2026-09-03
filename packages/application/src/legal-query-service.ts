@@ -16,7 +16,8 @@ import {
   type ProvisionId,
   type ProvisionVersionId,
   type PublishedProvisionVersion,
-  type VerifiedPublishedProvisionVersion,
+  type ServablePublishedProvisionVersion,
+  isServableReviewStatus,
 } from "@luatvn/domain";
 
 import type { LegalReadOperation, LegalReadRepository } from "./ports/legal-read-repository.js";
@@ -218,13 +219,13 @@ function assertResultLimit(field: string, length: number, maximum: number): void
 
 function isVerifiedVersion(
   version: PublishedProvisionVersion,
-): version is VerifiedPublishedProvisionVersion {
-  return version.reviewStatus === "verified";
+): version is ServablePublishedProvisionVersion {
+  return isServableReviewStatus(version.reviewStatus);
 }
 
 function requireVerifiedVersion(
   version: PublishedProvisionVersion,
-): VerifiedPublishedProvisionVersion {
+): ServablePublishedProvisionVersion {
   if (!isVerifiedVersion(version)) {
     throw new LegalQueryError(
       "UNVERIFIED_VERSION",
@@ -234,7 +235,7 @@ function requireVerifiedVersion(
   return version;
 }
 
-function primaryEvidenceFor(version: VerifiedPublishedProvisionVersion): EvidenceReference {
+function primaryEvidenceFor(version: ServablePublishedProvisionVersion): EvidenceReference {
   const matches = version.evidence.filter(
     (evidence) => evidence.evidenceId === version.primaryEvidenceId,
   );
@@ -246,7 +247,7 @@ function primaryEvidenceFor(version: VerifiedPublishedProvisionVersion): Evidenc
 }
 
 function citationFor(
-  version: VerifiedPublishedProvisionVersion,
+  version: ServablePublishedProvisionVersion,
   validAt: LegalDate,
   checkedAt: IsoInstant,
 ): LegalCitation {

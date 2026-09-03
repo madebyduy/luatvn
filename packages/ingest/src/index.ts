@@ -17,6 +17,14 @@ export {
   type CongBaoPageErrorCode,
 } from "./congbao-client.js";
 export {
+  crossCheckCongBao,
+  type CrossCheckId,
+  type CrossCheckInput,
+  type CrossCheckReport,
+  type CrossCheckResult,
+  type CrossCheckStatus,
+} from "./cross-check.js";
+export {
   CongBaoExtractError,
   extractCongBaoDraft,
   type CongBaoDraftEvidence,
