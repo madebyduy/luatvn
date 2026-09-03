@@ -121,7 +121,7 @@ describe("release verification chain", () => {
   it("passes on a release published through the normal pipeline", async () => {
     await publishDrillRelease();
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
 
     expect(report.issues).toEqual([]);
     expect(report.archivedSources).toBe(1);
@@ -182,7 +182,7 @@ describe("release verification chain", () => {
     );
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
     expect(report.issues.map((issue) => issue.code)).toContain("EVIDENCE_NOT_ARCHIVED");
     expect(report.derivedProvisions).toBe(0);
   });
@@ -204,7 +204,7 @@ describe("release verification chain", () => {
     );
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
     expect(report.issues.map((issue) => issue.code)).toEqual(["TEXT_MISMATCH"]);
     expect(report.derivedProvisions).toBe(0);
   });
@@ -214,7 +214,7 @@ describe("release verification chain", () => {
     await rewriteReleaseFile("review-log.json", Buffer.from("[]\n", "utf8"));
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
     expect(report.issues.map((issue) => issue.code)).toEqual(["UNVOUCHED_RECORD"]);
     expect(report.vouchedProvisions).toBe(0);
   });
@@ -222,7 +222,7 @@ describe("release verification chain", () => {
   it("reports records whose source was never archived", async () => {
     await publishDrillRelease({ attachSources: false });
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
 
     expect(report.issues.map((issue) => issue.code)).toEqual(["EVIDENCE_NOT_ARCHIVED"]);
     expect(report.archivedSources).toBe(0);
@@ -245,7 +245,7 @@ describe("release verification chain", () => {
       ...loadOptions,
       archivePolicy: "optional",
     });
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
     expect(new Set(report.issues.map((issue) => issue.code))).toEqual(
       new Set(["ARCHIVE_NOT_PRESENT"]),
     );
@@ -272,7 +272,7 @@ describe("release verification chain", () => {
     );
 
     const release = await loadPublishedRelease(dataDirectory, loadOptions);
-    const report = verifyReleaseChain(release);
+    const report = await verifyReleaseChain(release);
     expect(report.issues.map((issue) => issue.code)).toEqual(["ORPHAN_ARCHIVE"]);
   });
 });

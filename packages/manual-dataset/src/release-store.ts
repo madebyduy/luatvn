@@ -96,6 +96,11 @@ export interface ReleaseAttachment {
 }
 
 export interface PublishReleaseOptions {
+  /**
+   * Who is publishing this release and answerable for it. NOT a claim that
+   * this person read every record: the per-record trail is reviewLog, where
+   * each entry says whether a human or the cross-check machine vouched.
+   */
   readonly reviewedBy: string;
   readonly now?: IsoInstant;
   readonly allowedHosts?: readonly string[];
@@ -246,10 +251,10 @@ async function loadReleaseById(
       `Manifest release ${manifest.datasetReleaseId} does not match requested release ${releaseId}`,
     );
   }
-  if (manifest.reviewState !== "verified") {
+  if (manifest.reviewState !== "verified" && manifest.reviewState !== "machine_checked") {
     throw new ReleaseStoreError(
       "RELEASE_NOT_REVIEWED",
-      `Release ${releaseId} manifest review state is ${manifest.reviewState}; only verified releases may load`,
+      `Release ${releaseId} manifest review state is ${manifest.reviewState}; only verified or machine_checked releases may load`,
     );
   }
 
@@ -360,11 +365,16 @@ async function loadReleaseById(
         `Release ${releaseId} review log does not match the audit schema`,
       );
     }
-    reviewLog = parsedLog.data.map((entry) => ({
-      reviewedAt: parseIsoInstant(entry.reviewedAt),
-      reviewedBy: entry.reviewedBy,
-      target: entry.target,
-    }));
+    reviewLog = parsedLog.data.map((entry) =>
+      Object.assign(
+        {
+          reviewedAt: parseIsoInstant(entry.reviewedAt),
+          reviewedBy: entry.reviewedBy,
+          target: entry.target,
+        },
+        entry.method === undefined ? {} : { method: entry.method },
+      ),
+    );
   }
 
   if (dataset.datasetReleaseId !== manifest.datasetReleaseId) {
@@ -492,7 +502,13 @@ export async function publishRelease(
     datasetReleaseId: releaseId,
     releasedAt: now,
     reviewedBy,
-    reviewState: "verified",
+    // The weakest tier present, never the strongest. A release holding one
+    // machine_checked record is a machine_checked release, and says so.
+    reviewState: decoded.value.provisionVersions.some(
+      (version) => version.reviewStatus === "machine_checked",
+    )
+      ? "machine_checked"
+      : "verified",
     files: manifestFiles,
     archives: manifestArchives,
   };

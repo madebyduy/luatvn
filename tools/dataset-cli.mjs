@@ -416,7 +416,7 @@ async function runVerify(dataDirectory, flags) {
     out(`allow-hosts override active (drill/test only): ${loadOptions.allowedHosts.join(", ")}`);
   }
   const release = await loadPublishedRelease(dataDirectory, loadOptions);
-  const report = verifyReleaseChain(release);
+  const report = await verifyReleaseChain(release);
 
   out(`verifying release ${release.datasetReleaseId}`);
   out(`  provisions: ${release.dataset.provisionVersions.length}`);

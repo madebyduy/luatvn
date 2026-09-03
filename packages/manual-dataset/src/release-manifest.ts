@@ -45,7 +45,7 @@ export const releaseManifestSchema = z
     datasetReleaseId: domainValue(parseDatasetReleaseId, maximumIdentifierLength),
     releasedAt: isoInstantSchema,
     reviewedBy: z.string().min(1).max(256),
-    reviewState: z.enum(["verified", "under_review", "unverified"]),
+    reviewState: z.enum(["verified", "machine_checked", "under_review", "unverified"]),
     files: z.array(manifestFileSchema).min(1).max(maximumManifestFiles),
     archives: z.array(manifestArchiveSchema).max(maximumManifestFiles).default([]),
   })

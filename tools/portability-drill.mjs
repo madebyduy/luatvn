@@ -93,7 +93,7 @@ try {
     `${loaded.datasetReleaseId}, ${String(loaded.dataset.provisionVersions.length)} bản ghi, ${String(loaded.files.size)} file`,
   );
 
-  const report = verifyReleaseChain(loaded);
+  const report = await verifyReleaseChain(loaded);
   const verified = report.issues.length === 0;
   check(
     "dựng lại nguyên văn từ nguồn ngay trên bản sao chép",

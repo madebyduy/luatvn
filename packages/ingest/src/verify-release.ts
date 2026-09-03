@@ -1,5 +1,9 @@
+import type { PublishedProvisionVersion } from "@luatvn/domain";
 import { sha256HexOfBytes, type LoadedRelease } from "@luatvn/manual-dataset";
+import { extractPdfLines, PdfTextError } from "@luatvn/pdf-text";
 
+import type { CongBaoDocumentReference } from "./congbao-client.js";
+import { CongBaoExtractError, extractCongBaoDraft } from "./extract-congbao.js";
 import { extractVbplDraft, VbplExtractError } from "./extract-vbpl.js";
 
 export type VerificationCode =
@@ -9,6 +13,7 @@ export type VerificationCode =
   | "TEXT_MISMATCH"
   | "PROVISION_NOT_IN_SOURCE"
   | "UNVOUCHED_RECORD"
+  | "WRONG_VOUCHER"
   | "ORPHAN_ARCHIVE";
 
 export interface VerificationIssue {
@@ -32,13 +37,30 @@ export interface ReleaseVerificationReport {
 }
 
 const archivePrefix = "archive/";
+const pdfMagic = "%PDF";
 
-// Re-derives the legal text of a release from the bytes archived inside that
-// release and compares the hashes. Passing means: this text was produced by
-// this extractor from that archived source, and a named human vouched for each
-// record. It does not mean the source itself states the law correctly - that
-// remains a question for the official source the evidence points at.
-export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationReport {
+function looksLikePdf(bytes: Uint8Array): boolean {
+  return Buffer.from(bytes.subarray(0, 4)).toString("latin1") === pdfMagic;
+}
+
+/**
+ * Re-derives the legal text of a release from the bytes archived for it and
+ * compares the hashes. Passing means: this text was produced by this
+ * extractor from that archived source, and something named vouched for each
+ * record at the tier the record claims. It does not mean the source itself
+ * states the law correctly - that remains a question for the official source
+ * the evidence points at.
+ *
+ * Two source shapes are re-derivable, matching the two ingest paths: the flight
+ * payload of a vbpl.vn detail page, and the signed PDF a gazette published.
+ * A gazette PDF is re-derived using a reference rebuilt from the release's own
+ * records - document number and effective date come from the record, source URL
+ * and locator from its evidence - so a release remains checkable from itself,
+ * with no second file and no network.
+ */
+export async function verifyReleaseChain(
+  release: LoadedRelease,
+): Promise<ReleaseVerificationReport> {
   const issues: VerificationIssue[] = [];
   const archives = new Map<string, { readonly bytes: Uint8Array; readonly sha256: string }>();
   for (const [path, bytes] of release.files) {
@@ -64,7 +86,7 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
     missingByHash.set(digest, path);
   }
 
-  const provisionsByArchive = new Map<string, typeof release.dataset.provisionVersions>();
+  const provisionsByArchive = new Map<string, PublishedProvisionVersion[]>();
   const usedArchives = new Set<string>();
   let uncheckedProvisions = 0;
 
@@ -120,25 +142,57 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
 
     let derivedByProvisionId: ReadonlyMap<string, string>;
     try {
-      const { draft } = extractVbplDraft(Buffer.from(archive.bytes).toString("utf8"), {
-        datasetReleaseId: release.datasetReleaseId,
-        evidence: {
-          officialSourceUrl: primary.officialSourceUrl,
-          retrievedAt: primary.retrievedAt,
-          sourceSha256: primary.sourceSha256,
-        },
-      });
-      derivedByProvisionId = new Map(
-        draft.provisionVersions.map((version) => [version.provisionId, version.legalTextSha256]),
-      );
+      if (looksLikePdf(archive.bytes)) {
+        // Everything the gazette extractor needs about the document, taken
+        // from the release itself. issuedOn and title do not affect the text
+        // it derives; they are filled from the record so the shape is complete.
+        const reference: CongBaoDocumentReference = {
+          documentNumber: first.documentNumber,
+          effectiveFrom: first.validTime.from,
+          issuedOn: first.validTime.from,
+          locator: primary.locator ?? "",
+          pdfUrl: primary.officialSourceUrl,
+          title: first.heading ?? first.documentNumber,
+        };
+        // eslint-disable-next-line no-await-in-loop -- archives are re-derived one at a time so a failure names the archive that caused it
+        const pdfText = await extractPdfLines(archive.bytes);
+        const { draft } = extractCongBaoDraft(pdfText, {
+          datasetReleaseId: release.datasetReleaseId,
+          evidence: {
+            locator: reference.locator,
+            officialSourceUrl: primary.officialSourceUrl,
+            retrievedAt: primary.retrievedAt,
+            sourceSha256: primary.sourceSha256,
+          },
+          reference,
+        });
+        derivedByProvisionId = new Map(
+          draft.provisionVersions.map((version) => [version.provisionId, version.legalTextSha256]),
+        );
+      } else {
+        const { draft } = extractVbplDraft(Buffer.from(archive.bytes).toString("utf8"), {
+          datasetReleaseId: release.datasetReleaseId,
+          evidence: {
+            officialSourceUrl: primary.officialSourceUrl,
+            retrievedAt: primary.retrievedAt,
+            sourceSha256: primary.sourceSha256,
+          },
+        });
+        derivedByProvisionId = new Map(
+          draft.provisionVersions.map((version) => [version.provisionId, version.legalTextSha256]),
+        );
+      }
     } catch (error) {
+      const detail =
+        error instanceof VbplExtractError ||
+        error instanceof CongBaoExtractError ||
+        error instanceof PdfTextError
+          ? ` (${error.code})`
+          : "";
       issues.push({
         code: "SOURCE_NOT_DERIVABLE",
         locator: archivePath,
-        message:
-          error instanceof VbplExtractError
-            ? `Archived source cannot be re-processed (${error.code}); the text in this release cannot be checked against it`
-            : "Archived source cannot be re-processed; the text in this release cannot be checked against it",
+        message: `Archived source cannot be re-processed${detail}; the text in this release cannot be checked against it`,
       });
       continue;
     }
@@ -166,21 +220,40 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
     }
   }
 
-  const vouchedTargets = new Set(release.reviewLog.map((entry) => entry.target));
+  // Every servable record must be vouched for, and by the right kind of
+  // voucher. A record claiming a person read it needs a human audit entry; a
+  // machine_checked record needs a machine one. Without the second half, a
+  // record could be marked verified while only the cross-check ever looked.
+  const vouchersByTarget = new Map<string, Set<string>>();
+  for (const entry of release.reviewLog) {
+    const methods = vouchersByTarget.get(entry.target) ?? new Set<string>();
+    methods.add(entry.method ?? "human");
+    vouchersByTarget.set(entry.target, methods);
+  }
   let vouchedProvisions = 0;
   for (const provision of release.dataset.provisionVersions) {
-    if (provision.reviewStatus !== "verified") {
+    if (provision.reviewStatus !== "verified" && provision.reviewStatus !== "machine_checked") {
       continue;
     }
-    if (vouchedTargets.has(provision.provisionVersionId)) {
-      vouchedProvisions += 1;
+    const methods = vouchersByTarget.get(provision.provisionVersionId);
+    if (methods === undefined) {
+      issues.push({
+        code: "UNVOUCHED_RECORD",
+        locator: provision.provisionVersionId,
+        message: `Record is marked ${provision.reviewStatus} but no reviewer entry in this release vouches for it`,
+      });
       continue;
     }
-    issues.push({
-      code: "UNVOUCHED_RECORD",
-      locator: provision.provisionVersionId,
-      message: "Record is marked verified but no reviewer entry in this release vouches for it",
-    });
+    const wanted = provision.reviewStatus === "verified" ? "human" : "machine";
+    if (!methods.has(wanted)) {
+      issues.push({
+        code: "WRONG_VOUCHER",
+        locator: provision.provisionVersionId,
+        message: `Record is marked ${provision.reviewStatus} but its only reviewer entries are ${[...methods].join(", ")}; a ${wanted} entry is required`,
+      });
+      continue;
+    }
+    vouchedProvisions += 1;
   }
 
   for (const archivePath of archives.keys()) {
@@ -195,9 +268,9 @@ export function verifyReleaseChain(release: LoadedRelease): ReleaseVerificationR
 
   return {
     archivedSources: archives.size,
-    uncheckedProvisions,
     derivedProvisions,
     issues,
+    uncheckedProvisions,
     vouchedProvisions,
   };
 }
